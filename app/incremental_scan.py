@@ -247,10 +247,10 @@ def run_incremental_scan(root_path):
             deleted_count=deleted_count
         )
 
-    except Exception:
+    except (Exception, KeyboardInterrupt) as error:
         finish_scan_session(
             session_id,
-            "FAILED",
+            "CANCELLED" if isinstance(error, KeyboardInterrupt) else "FAILED",
             discovered_count,
             new_count,
             updated_count,
@@ -288,7 +288,11 @@ def main():
 
     args = parser.parse_args()
 
-    run_incremental_scan(args.path)
+    try:
+        run_incremental_scan(args.path)
+    except KeyboardInterrupt:
+        print("\n스캔이 취소되었습니다. 이미 저장된 변경 사항은 유지됩니다.")
+        raise SystemExit(130) from None
 
 
 if __name__ == "__main__":
