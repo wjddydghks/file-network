@@ -81,3 +81,107 @@ def test_incremental_scan_detects_modified_file(
     assert session["unchanged_count"] == 0
     assert db.get_file_count() == 1
 
+
+
+def read_files():
+    with db.get_connection() as connection:
+        return [dict(row) for row in connection.execute(
+            "SELECT * FROM files ORDER BY id"
+        )]
+
+
+def test_deleted_file_restored_with_identical_metadata(tmp_path, monkeypatch):
+    """메타데이터가 같아도 재발견된 파일은 활성 상태로 복원한다."""
+    import os
+
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
+    root = tmp_path / "scan"
+    root.mkdir()
+    path = root / "sample.txt"
+    path.write_text("hello", encoding="utf-8")
+    original_stat = path.stat()
+    run_incremental_scan(root)
+    original_id = read_files()[0]["id"]
+
+    path.unlink()
+    run_incremental_scan(root)
+    assert read_files()[0]["scan_status"] == "DELETED"
+
+    path.write_text("hello", encoding="utf-8")
+    os.utime(path, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+    run_incremental_scan(root)
+
+    restored = read_files()[0]
+    assert restored["id"] == original_id
+    assert restored["scan_status"] == "DISCOVERED"
+    assert restored["inode"] == path.stat().st_ino
+    assert get_latest_scan_session()["updated_count"] == 1
+    assert get_latest_scan_session()["unchanged_count"] == 0
+
+    run_incremental_scan(root)
+    assert get_latest_scan_session()["unchanged_count"] == 1
+
+
+def test_move_preserves_file_id(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
+    root = tmp_path / "scan"
+    root.mkdir()
+    source = root / "before.txt"
+    source.write_text("hello", encoding="utf-8")
+    run_incremental_scan(root)
+    original_id = read_files()[0]["id"]
+
+    destination = root / "after.txt"
+    source.rename(destination)
+    run_incremental_scan(root)
+
+    files = read_files()
+    assert len(files) == 1
+    assert files[0]["id"] == original_id
+    assert files[0]["path"] == str(destination)
+    assert files[0]["scan_status"] == "DISCOVERED"
+    assert get_latest_scan_session()["new_count"] == 0
+
+
+def test_deletion_is_limited_to_scanned_root(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
+    root = tmp_path / "scan"
+    sibling = tmp_path / "scan-other"
+    root.mkdir()
+    sibling.mkdir()
+    path = root / "sample.txt"
+    path.write_text("hello", encoding="utf-8")
+    (sibling / "other.txt").write_text("keep", encoding="utf-8")
+    run_incremental_scan(root)
+    run_incremental_scan(sibling)
+
+    path.unlink()
+    run_incremental_scan(root)
+
+    states = {file["path"]: file["scan_status"] for file in read_files()}
+    assert states[str(path)] == "DELETED"
+    assert states[str(sibling / "other.txt")] == "DISCOVERED"
+    assert get_latest_scan_session()["scan_complete"] == 1
+
+
+def test_access_error_prevents_deletion(tmp_path, monkeypatch):
+    from app import incremental_scan
+
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
+    root = tmp_path / "scan"
+    root.mkdir()
+    (root / "sample.txt").write_text("hello", encoding="utf-8")
+    run_incremental_scan(root)
+
+    def inaccessible_scan(root_path, batch_size, scan_stats):
+        scan_stats.update(error_count=1, directory_error_count=1, file_error_count=0)
+        yield from ()
+
+    monkeypatch.setattr(incremental_scan, "scan_directory", inaccessible_scan)
+    run_incremental_scan(root)
+
+    assert read_files()[0]["scan_status"] == "DISCOVERED"
+    session = get_latest_scan_session()
+    assert session["status"] == "COMPLETED_WITH_ERRORS"
+    assert session["scan_complete"] == 0
+    assert session["error_count"] == 1

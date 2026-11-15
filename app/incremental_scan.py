@@ -23,7 +23,7 @@ def get_existing_files(files):
         rows = connection.execute(
             f"""
             SELECT path, name, extension, size,
-                   modified_at, file_type, device_id, inode
+                   modified_at, file_type, device_id, inode, scan_status
             FROM files
             WHERE path IN ({placeholders})
             """,
@@ -41,6 +41,10 @@ def get_existing_files(files):
 
 def is_file_changed(new_file, old_file):
     if old_file is None:
+        return True
+
+    # 삭제 후 같은 메타데이터로 복구된 파일도 다시 활성화해야 한다.
+    if old_file["scan_status"] == "DELETED":
         return True
 
     # 같은 경로에서 파일이 교체되면 이동 추적에 사용할 식별자도 갱신한다.
