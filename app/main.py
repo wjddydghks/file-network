@@ -3,7 +3,8 @@ import argparse
 from database.db import (
     initialize_database,
     save_files,
-    get_file_count
+    get_file_count,
+    get_active_file_count
 )
 
 from core.scanner.scanner import scan_directory
@@ -40,7 +41,8 @@ def main():
 
     print("\n\n스캔 완료!")
     print(f"이번 실행에서 저장 처리한 파일: {total_saved:,}개")
-    print(f"DB에 등록된 전체 파일: {get_file_count():,}개")
+    print(f"DB 활성 파일: {get_active_file_count():,}개")
+    print(f"DB 전체 레코드: {get_file_count():,}개")
 
 
 if __name__ == "__main__":

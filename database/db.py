@@ -120,6 +120,13 @@ def get_file_count():
         ).fetchone()[0]
 
 
+def get_active_file_count():
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT COUNT(*) FROM files WHERE scan_status != 'DELETED'"
+        ).fetchone()[0]
+
+
 def get_active_files_under(root_path):
     root = str(Path(root_path).expanduser().resolve())
     prefix = root.rstrip(sep) + sep
