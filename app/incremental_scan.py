@@ -47,6 +47,13 @@ def is_file_changed(new_file, old_file):
     if old_file["scan_status"] == "DELETED":
         return True
 
+    # 같은 경로에서 파일이 교체되면 이동 추적에 사용할 식별자도 갱신한다.
+    if any(
+        new_file.get(field) != old_file.get(field)
+        for field in ("device_id", "inode")
+    ):
+        return True
+
     compared_fields = (
         "name",
         "extension",
