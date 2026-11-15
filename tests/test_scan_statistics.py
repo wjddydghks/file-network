@@ -30,7 +30,7 @@ def test_existing_scan_sessions_are_migrated_without_data_loss(tmp_path, monkeyp
     assert session["scan_complete"] == 0
 
 
-@pytest.mark.parametrize("mode", ["complete", "access_error", "failed"])
+@pytest.mark.parametrize("mode", ["complete", "access_error", "failed", "cancelled"])
 def test_scan_statistics_track_mixed_changes(tmp_path, monkeypatch, capsys, mode):
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
     root = tmp_path / "scan"
@@ -57,17 +57,22 @@ def test_scan_statistics_track_mixed_changes(tmp_path, monkeypatch, capsys, mode
             kwargs["scan_stats"]["error_count"] += 1
 
         monkeypatch.setattr(incremental_scan, "scan_directory", scan_with_error)
-    elif mode == "failed":
+    elif mode in ("failed", "cancelled"):
         original_save = db.save_files
 
         def fail_on_new_files(files):
             if any(file["name"] == "fresh.txt" for file in files):
+                if mode == "cancelled":
+                    raise KeyboardInterrupt
                 raise RuntimeError("simulated write failure")
             return original_save(files)
 
         monkeypatch.setattr(db, "save_files", fail_on_new_files)
 
-    if mode == "failed":
+    if mode == "cancelled":
+        with pytest.raises(KeyboardInterrupt):
+            incremental_scan.run_incremental_scan(root)
+    elif mode == "failed":
         with pytest.raises(RuntimeError, match="simulated write failure"):
             incremental_scan.run_incremental_scan(root)
     else:
@@ -84,6 +89,7 @@ def test_scan_statistics_track_mixed_changes(tmp_path, monkeypatch, capsys, mode
         "complete": "COMPLETED",
         "access_error": "COMPLETED_WITH_ERRORS",
         "failed": "FAILED",
+        "cancelled": "CANCELLED",
     }[mode]
     assert session["scan_complete"] == (mode == "complete")
     assert session["error_count"] == (mode == "access_error")
@@ -96,9 +102,9 @@ def test_scan_statistics_track_mixed_changes(tmp_path, monkeypatch, capsys, mode
         assert connection.execute(
             "SELECT id FROM files WHERE name = 'moved.txt'"
         ).fetchone()["id"] == moved_id
-    assert db.get_file_count() == (4 if mode == "failed" else 5)
+    assert db.get_file_count() == (4 if mode in ("failed", "cancelled") else 5)
     assert db.get_active_file_count() == (5 if mode == "access_error" else 4)
-    if mode != "failed":
+    if mode not in ("failed", "cancelled"):
         output = capsys.readouterr().out
         assert "이동 파일: 1개" in output
         assert "DB 활성 파일:" in output
