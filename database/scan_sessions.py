@@ -24,6 +24,8 @@ def initialize_scan_sessions():
                 new_count INTEGER NOT NULL DEFAULT 0,
                 updated_count INTEGER NOT NULL DEFAULT 0,
                 unchanged_count INTEGER NOT NULL DEFAULT 0,
+                moved_count INTEGER NOT NULL DEFAULT 0,
+                deleted_count INTEGER NOT NULL DEFAULT 0,
                 error_count INTEGER NOT NULL DEFAULT 0,
                 scan_complete INTEGER NOT NULL DEFAULT 0
             )
@@ -47,6 +49,13 @@ def initialize_scan_sessions():
                 ALTER TABLE scan_sessions
                 ADD COLUMN scan_complete INTEGER NOT NULL DEFAULT 0
             """)
+
+        for column in ("moved_count", "deleted_count"):
+            if column not in columns:
+                connection.execute(
+                    f"ALTER TABLE scan_sessions ADD COLUMN {column} "
+                    "INTEGER NOT NULL DEFAULT 0"
+                )
 
         connection.commit()
 
@@ -91,7 +100,9 @@ def finish_scan_session(
     updated_count,
     unchanged_count,
     error_count=0,
-    scan_complete=False
+    scan_complete=False,
+    moved_count=0,
+    deleted_count=0
 ):
     connection = db.get_connection()
 
@@ -106,7 +117,9 @@ def finish_scan_session(
                 updated_count = ?,
                 unchanged_count = ?,
                 error_count = ?,
-                scan_complete = ?
+                scan_complete = ?,
+                moved_count = ?,
+                deleted_count = ?
             WHERE id = ?
         """, (
             status,
@@ -117,6 +130,8 @@ def finish_scan_session(
             unchanged_count,
             error_count,
             int(scan_complete),
+            moved_count,
+            deleted_count,
             session_id
         ))
 

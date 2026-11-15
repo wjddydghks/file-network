@@ -99,6 +99,8 @@ def run_incremental_scan(root_path):
     new_count = 0
     updated_count = 0
     unchanged_count = 0
+    moved_count = 0
+    deleted_count = 0
 
     scan_stats = {}
 
@@ -196,6 +198,7 @@ def run_incremental_scan(root_path):
                 moved_new_paths.add(new_file["path"])
 
                 new_count -= 1
+                moved_count += 1
 
                 print(
                     f"이동 감지: {old_file['path']} "
@@ -212,8 +215,6 @@ def run_incremental_scan(root_path):
             db.save_files(remaining_new_files)
 
         # 접근 오류가 없다면 삭제 파일을 판정한다.
-        deleted_count = 0
-
         if error_count == 0:
             deleted_paths = [
                 file["path"]
@@ -241,7 +242,9 @@ def run_incremental_scan(root_path):
             updated_count,
             unchanged_count,
             error_count,
-            scan_complete
+            scan_complete,
+            moved_count=moved_count,
+            deleted_count=deleted_count
         )
 
     except Exception:
@@ -253,7 +256,9 @@ def run_incremental_scan(root_path):
             updated_count,
             unchanged_count,
             scan_stats.get("error_count", 0),
-            False
+            False,
+            moved_count=moved_count,
+            deleted_count=deleted_count
         )
         raise
 
@@ -262,10 +267,12 @@ def run_incremental_scan(root_path):
     print(f"신규 파일: {new_count:,}개")
     print(f"변경 파일: {updated_count:,}개")
     print(f"변경 없는 파일: {unchanged_count:,}개")
+    print(f"이동 파일: {moved_count:,}개")
     print(f"접근 오류: {scan_stats['error_count']:,}건")
     print(f"삭제 파일: {deleted_count:,}개")
     print(f"스캔 완전성: {'완료' if scan_complete else '불완전'}")
-    print(f"DB 전체 파일: {db.get_file_count():,}개")
+    print(f"DB 활성 파일: {db.get_active_file_count():,}개")
+    print(f"DB 전체 레코드: {db.get_file_count():,}개")
     print(f"스캔 세션 ID: {session_id}")
 
 
