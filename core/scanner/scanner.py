@@ -59,7 +59,7 @@ def classify_file(extension):
     return "OTHER"
 
 
-def scan_directory(root_path, batch_size=500):
+def scan_directory(root_path, batch_size=500, scan_stats=None):
     root = Path(root_path).expanduser().resolve()
 
     if not root.exists():
@@ -68,11 +68,16 @@ def scan_directory(root_path, batch_size=500):
     if not root.is_dir():
         raise NotADirectoryError(f"디렉터리가 아닙니다: {root}")
 
+    if scan_stats is None:
+        scan_stats = {}
+
+    scan_stats["error_count"] = 0
+    scan_stats["directory_error_count"] = 0
+    scan_stats["file_error_count"] = 0
+
     stack = [str(root)]
     batch = []
-
     scanned_count = 0
-    error_count = 0
 
     while stack:
         current_path = stack.pop()
@@ -81,7 +86,6 @@ def scan_directory(root_path, batch_size=500):
             with os.scandir(current_path) as entries:
                 for entry in entries:
                     try:
-                        # 심볼릭 링크는 탐색하지 않음
                         if entry.is_symlink():
                             continue
 
@@ -92,12 +96,9 @@ def scan_directory(root_path, batch_size=500):
                         if not entry.is_file(follow_symlinks=False):
                             continue
 
-                        stat = entry.stat(
-                            follow_symlinks=False
-                        )
+                        stat = entry.stat(follow_symlinks=False)
 
                         extension = Path(entry.name).suffix.lower()
-
                         now = datetime.now(timezone.utc).isoformat()
 
                         batch.append({
@@ -117,6 +118,10 @@ def scan_directory(root_path, batch_size=500):
                             else None,
                             "file_type": classify_file(extension),
                             "scanned_at": now,
+
+                            # 파일 이동 추적용 식별 정보
+                            "device_id": getattr(stat, "st_dev", None),
+                            "inode": getattr(stat, "st_ino", None)
                         })
 
                         scanned_count += 1
@@ -126,13 +131,17 @@ def scan_directory(root_path, batch_size=500):
                             batch = []
 
                     except OSError:
-                        error_count += 1
+                        scan_stats["error_count"] += 1
+                        scan_stats["file_error_count"] += 1
 
         except OSError:
-            error_count += 1
+            scan_stats["error_count"] += 1
+            scan_stats["directory_error_count"] += 1
 
     if batch:
         yield batch
 
     print(f"발견한 파일: {scanned_count:,}개")
-    print(f"접근 오류: {error_count:,}건")
+    print(f"접근 오류: {scan_stats['error_count']:,}건")
+
+
