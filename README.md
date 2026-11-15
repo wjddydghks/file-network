@@ -67,9 +67,13 @@ file-network/
 ├── app/
 │   ├── __init__.py
 │   ├── main.py
+│   ├── extract_text.py
 │   └── incremental_scan.py
 ├── core/
 │   ├── __init__.py
+│   ├── extractors/
+│   │   ├── __init__.py
+│   │   └── text.py
 │   └── scanner/
 │       ├── __init__.py
 │       └── scanner.py
@@ -155,6 +159,25 @@ python -m pip install -r requirements.txt
 python -m pytest -v
 ```
 
+### 7) 텍스트·소스 코드 내용 추출
+
+```bash
+python -m app.extract_text "example.txt"
+python -m app.extract_text "example.py" --max-bytes 1048576
+```
+
+스캐너가 `TEXT` 또는 `CODE`로 분류하는 확장자에 대해 UTF-8 내용을 JSON으로 반환합니다. UTF-8 BOM은 제거하며 줄바꿈과 본문은 유지합니다. JSON의 한글·이모지는 콘솔 인코딩과 무관하게 Unicode 이스케이프로 출력되며 JSON 파싱 시 원문으로 복원됩니다.
+
+| 상태 | 의미 | 종료 코드 |
+|---|---|---|
+| `EXTRACTED` | `text`에 추출한 본문 저장 | 0 |
+| `SKIPPED` | 지원하지 않는 형식, 크기 초과, NUL 포함 바이너리 또는 일반 파일이 아닌 경로 | 0 |
+| `FAILED` | UTF-8 디코딩 또는 파일 읽기 실패 | 1 |
+
+`reason`으로 처리 사유를 구분합니다. 크기 제한은 기본 1 MiB이며 BOM을 포함한 원본 바이트 기준입니다. 제한보다 최대 1바이트 더 읽어 크기 초과를 판정합니다. UTF-8 이외의 인코딩을 추측하지 않으며 디렉터리·심볼릭 링크·특수 파일은 열지 않습니다. 잘못된 CLI 인자는 종료 코드 2를 반환합니다.
+
+단일 파일 추출용 CLI이며 원본 파일 내용을 변경하지 않습니다. 추출 결과의 DB 저장, 일괄 내용 분석, PDF·Office 파싱과 검색은 후속 단계입니다.
+
 ## 6. 개발 현황
 
 - [x] Python 프로젝트 초기 구조 구성
@@ -178,6 +201,7 @@ python -m pytest -v
 
 ### Phase 2. 파일 내용 분석
 
+- [x] TEXT·CODE 파일의 UTF-8 내용 추출 및 단일 파일 CLI
 - [ ] PDF, DOCX, PPTX, XLSX 파서 구현
 - [ ] 소스 코드 분석
 - [ ] 파일별 키워드 및 주제 추출
