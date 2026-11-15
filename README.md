@@ -331,7 +331,7 @@ GitHub Actions를 사용하여 코드 변경 시 자동으로 검증합니다.
 - 단위 테스트
 - 데이터베이스 및 파일 스캐너 검증
 
-향후 macOS와 Windows 환경까지 테스트 범위를 확장합니다.
+Ubuntu 24.04, macOS 15, Windows Server 2022에서 Python 3.12로 문법 검사와 전체 테스트를 실행합니다.
 
 ## 10. 개발 원칙
 

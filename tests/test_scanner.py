@@ -85,3 +85,42 @@ def test_scan_invalid_directory():
     with pytest.raises((FileNotFoundError, NotADirectoryError)):
         list(scan_directory("/this/path/does/not/exist"))
 
+
+
+def test_scan_refreshes_missing_directory_entry_identity(tmp_path, monkeypatch):
+    """Windows처럼 DirEntry 식별자가 0이면 전체 stat 조회로 보완한다."""
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from core.scanner import scanner
+
+    path = tmp_path / "sample.txt"
+    path.write_text("hello", encoding="utf-8")
+    actual_stat = path.stat()
+    original_scandir = scanner.os.scandir
+
+    class MissingIdentityStat:
+        st_ino = 0
+        st_dev = 0
+
+        def __init__(self, stat):
+            self.stat = stat
+
+        def __getattr__(self, name):
+            return getattr(self.stat, name)
+
+    @contextmanager
+    def scandir_without_identity(directory):
+        with original_scandir(directory) as entries:
+            yield [SimpleNamespace(
+                name=entry.name,
+                path=entry.path,
+                is_symlink=entry.is_symlink,
+                is_dir=entry.is_dir,
+                is_file=entry.is_file,
+                stat=lambda follow_symlinks=False: MissingIdentityStat(actual_stat),
+            ) for entry in entries]
+
+    monkeypatch.setattr(scanner.os, "scandir", scandir_without_identity)
+    files = [file for batch in scan_directory(tmp_path) for file in batch]
+    assert files[0]["inode"] == actual_stat.st_ino
+    assert files[0]["device_id"] == actual_stat.st_dev

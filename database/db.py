@@ -1,4 +1,5 @@
 import sqlite3
+from os import sep
 from pathlib import Path
 
 
@@ -121,7 +122,7 @@ def get_file_count():
 
 def get_active_files_under(root_path):
     root = str(Path(root_path).expanduser().resolve())
-    prefix = root.rstrip("/") + "/"
+    prefix = root.rstrip(sep) + sep
 
     with get_connection() as conn:
         rows = conn.execute("""
