@@ -98,6 +98,10 @@ def scan_directory(root_path, batch_size=500, scan_stats=None):
 
                         stat = entry.stat(follow_symlinks=False)
 
+                        # Windows의 DirEntry.stat()은 파일 식별자를 0으로 반환할 수 있다.
+                        if not getattr(stat, "st_ino", None):
+                            stat = os.stat(entry.path, follow_symlinks=False)
+
                         extension = Path(entry.name).suffix.lower()
                         now = datetime.now(timezone.utc).isoformat()
 
