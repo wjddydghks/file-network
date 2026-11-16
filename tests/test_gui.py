@@ -182,3 +182,77 @@ def test_folder_picker_updates_folder_and_preserves_it_when_cancelled(window, mo
     monkeypatch.setattr(gui.QFileDialog, "getExistingDirectory", lambda *args: "")
     QTest.mouseClick(view.browse, Qt.MouseButton.LeftButton)
     assert view.folder.text() == str(root)
+
+
+def test_gui_analysis_details_filter_reasons_open_and_switch_to_search(application, window, monkeypatch):
+    view, root = window
+    (root / "good.txt").write_text("Hello keyword", encoding="utf-8")
+    (root / "broken.txt").write_bytes(b"\xff")
+    (root / "unsupported.docx").write_bytes(b"docx")
+    view.start_analysis()
+    wait_until(application, lambda: view.worker is None)
+    assert "실패 1" in view.status.text()
+    QTest.mouseClick(view.details_button, Qt.MouseButton.LeftButton)
+    assert not view.details_button.isEnabled()
+    wait_until(application, lambda: view.worker is None)
+    assert view.table.columnCount() == 4
+    assert view.table.rowCount() == 3
+    assert "UTF-8" in view.preview.toPlainText()
+    assert "오류 상세" in view.preview.toPlainText()
+    view.analysis_filter.setCurrentIndex(view.analysis_filter.findData("SKIPPED"))
+    view.start_details()
+    wait_until(application, lambda: view.worker is None)
+    assert view.table.rowCount() == 1
+    assert "지원하지 않는 형식" in view.table.item(0, 2).text()
+    assert "원본 파일은 열 수 있습니다" in view.preview.toPlainText()
+    opened = []
+    monkeypatch.setattr(gui.QDesktopServices, "openUrl", lambda url: opened.append(url.toLocalFile()) or True)
+    QTest.mouseClick(view.open_button, Qt.MouseButton.LeftButton)
+    assert [Path(path) for path in opened] == [root / "unsupported.docx"]
+    view.query.setText("Hello")
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    assert view.table.columnCount() == 3
+    assert view.table.rowCount() == 1
+    assert "[Hello]" in view.preview.toPlainText()
+    assert "상태:" not in view.preview.toPlainText()
+
+
+def test_gui_details_show_pending_files_scope_and_limit(application, window):
+    from app.incremental_scan import run_incremental_scan
+
+    view, root = window
+    sibling = root.parent / "outside"
+    sibling.mkdir()
+    for folder in (root, sibling):
+        (folder / "pending.txt").write_text("hello", encoding="utf-8")
+        run_incremental_scan(folder)
+    view.analysis_filter.setCurrentIndex(view.analysis_filter.findData("PENDING"))
+    view.start_details()
+    wait_until(application, lambda: view.worker is None)
+    assert view.table.rowCount() == 1
+    assert "미분석" in view.preview.toPlainText()
+    view.all_folders.setChecked(True)
+    view.start_details()
+    wait_until(application, lambda: view.worker is None)
+    assert view.table.rowCount() == 2
+    view.limit.setValue(1)
+    view.start_details()
+    wait_until(application, lambda: view.worker is None)
+    assert view.table.rowCount() == 1
+    assert "최대 1개" in view.status.text()
+
+
+def test_gui_details_error_restores_controls(application, window, monkeypatch):
+    view, _ = window
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("분석 내역 조회 실패")
+
+    monkeypatch.setattr(gui, "list_analysis_results", fail)
+    view.start_details()
+    wait_until(application, lambda: view.worker is None)
+    assert "분석 내역 조회 실패" in view.status.text()
+    assert view.details_button.isEnabled()
+    assert view.analysis_filter.isEnabled()
+    assert not view.cancel.isEnabled()

@@ -7,7 +7,7 @@ try:
     from PySide6.QtCore import Qt, QThread, QUrl, Signal, Slot
     from PySide6.QtGui import QDesktopServices
     from PySide6.QtWidgets import (
-        QApplication, QCheckBox, QFileDialog, QHBoxLayout, QHeaderView, QLabel,
+        QApplication, QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QHeaderView, QLabel,
         QLineEdit, QMainWindow, QPlainTextEdit, QProgressBar, QPushButton,
         QSpinBox, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
     )
@@ -19,8 +19,10 @@ except ImportError as error:
     ) from error
 
 from app.analyze_content import run_content_analysis
+from app.analysis_details import STATUS_LABELS, format_analysis_detail, reason_label
 from core.operations import check_cancelled
 from database.content_search import search_content
+from database.file_contents import list_analysis_results
 
 
 class TaskThread(QThread):
@@ -57,6 +59,7 @@ class MainWindow(QMainWindow):
         self._results = []
         self._kind = None
         self._outcome = None
+        self._view_mode = "search"
 
         self.folder = QLineEdit()
         self.folder.setPlaceholderText("분석하거나 검색할 폴더를 선택하세요")
@@ -79,7 +82,8 @@ class MainWindow(QMainWindow):
         self.query = QLineEdit()
         self.query.setPlaceholderText("본문 검색어 — 여러 단어는 모두 포함하는 문서 검색")
         self.query.returnPressed.connect(self.start_search)
-        self.all_folders = QCheckBox("모든 분석 폴더 검색")
+        self.all_folders = QCheckBox("모든 분석 폴더")
+        self.all_folders.setToolTip("검색과 분석 내역을 저장된 전체 폴더 범위에서 조회")
         self.limit = QSpinBox()
         self.limit.setRange(1, 1000)
         self.limit.setValue(100)
@@ -88,6 +92,18 @@ class MainWindow(QMainWindow):
         search_row = QHBoxLayout()
         for widget in (self.query, self.all_folders, QLabel("최대 결과"), self.limit, self.search):
             search_row.addWidget(widget)
+
+        self.analysis_filter = QComboBox()
+        self.analysis_filter.addItem("전체 상태", None)
+        for status, label in STATUS_LABELS.items():
+            self.analysis_filter.addItem(label, status)
+        self.details_button = QPushButton("분석 내역 보기")
+        self.details_button.clicked.connect(self.start_details)
+        details_row = QHBoxLayout()
+        details_row.addWidget(QLabel("파일별 분석 상태"))
+        details_row.addWidget(self.analysis_filter)
+        details_row.addWidget(self.details_button)
+        details_row.addStretch(1)
 
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(["파일명", "경로", "일치 본문"])
@@ -124,6 +140,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout()
         layout.addLayout(folder_row)
         layout.addLayout(search_row)
+        layout.addLayout(details_row)
         layout.addWidget(splitter, 1)
         layout.addLayout(open_row)
         layout.addWidget(self.progress)
@@ -176,6 +193,19 @@ class MainWindow(QMainWindow):
         limit = self.limit.value()
         self._start_task("search", lambda cancelled, progress: search_content(query, limit=limit, root_path=root))
 
+    @Slot()
+    def start_details(self):
+        if self.worker is not None:
+            return
+        try:
+            root = None if self.all_folders.isChecked() else self._root()
+        except (ValueError, OSError, RuntimeError) as error:
+            self.status.setText(str(error))
+            return
+        status = self.analysis_filter.currentData()
+        limit = self.limit.value()
+        self._start_task("details", lambda cancelled, progress: list_analysis_results(root, status=status, limit=limit))
+
     def _start_task(self, kind, operation):
         self._kind = kind
         self._outcome = ("cancelled", None)
@@ -183,7 +213,7 @@ class MainWindow(QMainWindow):
         self.table.setRowCount(0)
         self.update_preview()
         self._set_busy(True)
-        self.status.setText("스캔·분석 중…" if kind == "analysis" else "검색 중…")
+        self.status.setText({"analysis": "스캔·분석 중…", "search": "검색 중…", "details": "분석 내역 조회 중…"}[kind])
         self.progress.setRange(0, 0)
         self.worker = TaskThread(operation, self)
         self.worker.completed.connect(self._completed)
@@ -194,7 +224,7 @@ class MainWindow(QMainWindow):
         self.worker.start()
 
     def _set_busy(self, busy):
-        for widget in (self.folder, self.browse, self.max_size, self.analyze, self.query, self.all_folders, self.limit, self.search, self.table):
+        for widget in (self.folder, self.browse, self.max_size, self.analyze, self.query, self.all_folders, self.limit, self.search, self.table, self.analysis_filter, self.details_button):
             widget.setEnabled(not busy)
         self.open_button.setEnabled(not busy and self.table.currentRow() >= 0)
         self.cancel.setEnabled(busy)
@@ -247,15 +277,26 @@ class MainWindow(QMainWindow):
         elif self._kind == "analysis":
             self.status.setText(
                 f"분석 완료 — 추출 {result['extracted']:,}, 기존 결과 재사용 {result['unchanged']:,}, "
-                f"건너뜀 {result['skipped']:,}, 실패 {result['failed']:,}개. 본문 검색을 사용할 수 있습니다."
+                f"건너뜀 {result['skipped']:,}, 실패 {result['failed']:,}개. 분석 내역에서 파일별 사유를 확인하세요."
             )
         else:
             self._results = result
+            self._view_mode = self._kind
+            details = self._view_mode == "details"
+            self.table.setColumnCount(4 if details else 3)
+            self.table.setHorizontalHeaderLabels(["파일명", "상태", "사유", "경로"] if details else ["파일명", "경로", "일치 본문"])
             self.table.setRowCount(len(result))
             for row_index, row in enumerate(result):
-                for column, key in enumerate(("name", "path", "snippet")):
-                    self.table.setItem(row_index, column, QTableWidgetItem(row[key] or ""))
-            self.status.setText(f"검색 결과 {len(result):,}개" if result else "검색 결과가 없습니다. 폴더와 검색어, 분석 여부를 확인하세요.")
+                values = (
+                    (row["name"], STATUS_LABELS.get(row["status"], row["status"]), reason_label(row), row["path"])
+                    if details else (row["name"], row["path"], row["snippet"])
+                )
+                for column, value in enumerate(values):
+                    self.table.setItem(row_index, column, QTableWidgetItem(value or ""))
+            if details:
+                self.status.setText(f"분석 내역 {len(result):,}개 — 최대 {self.limit.value():,}개 표시. 마지막으로 확인한 상태입니다.")
+            else:
+                self.status.setText(f"검색 결과 {len(result):,}개" if result else "검색 결과가 없습니다. 폴더와 검색어, 분석 여부를 확인하세요.")
             if result:
                 self.table.selectRow(0)
         if self._closing:
@@ -266,7 +307,7 @@ class MainWindow(QMainWindow):
         index = self.table.currentRow()
         if 0 <= index < len(self._results):
             result = self._results[index]
-            self.preview.setPlainText(result["snippet"] or "")
+            self.preview.setPlainText(format_analysis_detail(result) if self._view_mode == "details" else result["snippet"] or "")
             self.selected_path.setText(result["path"])
             self.open_button.setEnabled(self.worker is None)
         else:
