@@ -6,9 +6,26 @@ from pathlib import Path
 DB_PATH = Path(__file__).resolve().parent / "file_network.db"
 
 
+def _store_file_identity(value):
+    # 숫자 문자열은 INTEGER 열에서 REAL로 바뀔 수 있어 접두사로 정밀도를 보존한다.
+    if isinstance(value, int) and not -(2**63) <= value < 2**63:
+        return f"int:{value}"
+    return value
+
+
+def _file_identity_row(cursor, row):
+    """파일 식별자를 복원하면서 sqlite3.Row의 이름·인덱스 조회를 유지한다."""
+    values = list(row)
+    for index, column in enumerate(cursor.description):
+        value = values[index]
+        if column[0] in ("device_id", "inode") and isinstance(value, str) and value.startswith("int:"):
+            values[index] = int(value[4:])
+    return sqlite3.Row(cursor, tuple(values))
+
+
 def get_connection():
     conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn.row_factory = _file_identity_row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
@@ -101,8 +118,8 @@ def save_files(files):
             file["created_at"],
             file["file_type"],
             file["scanned_at"],
-            file.get("device_id"),
-            file.get("inode")
+            _store_file_identity(file.get("device_id")),
+            _store_file_identity(file.get("inode"))
         )
         for file in files
     ]
@@ -189,8 +206,8 @@ def update_moved_file(old_path, new_file):
             new_file["created_at"],
             new_file["file_type"],
             new_file["scanned_at"],
-            new_file.get("device_id"),
-            new_file.get("inode"),
+            _store_file_identity(new_file.get("device_id")),
+            _store_file_identity(new_file.get("inode")),
             old_path
         ))
 
