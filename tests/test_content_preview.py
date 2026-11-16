@@ -102,3 +102,46 @@ def test_invalid_ids_do_not_create_database(root, file_id):
     with pytest.raises(ValueError):
         file_contents.get_content_preview(file_id)
     assert not db.DB_PATH.exists()
+
+
+def test_segments_cover_all_unicode_text_without_overlap_or_loss(root):
+    path = root / 'long.txt'
+    text = ('가😀\r\n' * 60_000) + 'end'
+    path.write_bytes(text.encode('utf-8'))
+    run_content_analysis(root, max_bytes=len(text.encode('utf-8')))
+    file_id = search_filename('long')[0]['file_id']
+    first = file_contents.get_content_preview(file_id)
+    assert first['segment_count'] == 3
+    pieces = [file_contents.get_content_preview(file_id, segment=i, analyzed_at=first['analyzed_at']) for i in range(3)]
+    assert ''.join(p['text'] for p in pieces) == text
+    assert all(len(p['text']) <= file_contents.MAX_PREVIEW_CHARS for p in pieces)
+    assert [p['segment'] for p in pieces] == [0, 1, 2]
+    with pytest.raises(ValueError, match='존재하지 않는'):
+        file_contents.get_content_preview(file_id, segment=3)
+    path.unlink()  # Cached segments never open the source.
+    assert file_contents.get_content_preview(file_id, segment=2)['text'] == pieces[2]['text']
+
+
+@pytest.mark.parametrize('segment', [-1, True, '1', 1.0, 2**63])
+def test_invalid_segments_do_not_create_db(root, segment):
+    with pytest.raises(ValueError):
+        file_contents.get_content_preview(1, segment=segment)
+    assert not db.DB_PATH.exists()
+
+
+def test_segment_snapshot_guard_and_stale_state(root):
+    path = root / 'note.txt'
+    path.write_bytes(b'needle')
+    run_content_analysis(root)
+    file_id = search_filename('note')[0]['file_id']
+    before = file_contents.get_content_preview(file_id)
+    file_contents.save_file_content(file_id, TextExtractionResult(str(path), 'EXTRACTED', text='new'), 'new')
+    with pytest.raises(ValueError, match='변경'):
+        file_contents.get_content_preview(file_id, analyzed_at=before['analyzed_at'])
+    current = file_contents.get_content_preview(file_id)
+    path.write_bytes(b'longer modified body')
+    run_incremental_scan(root)
+    stale = file_contents.get_content_preview(file_id, segment=1, analyzed_at=current['analyzed_at'])
+    assert stale['status'] == 'STALE'
+    assert stale['text'] == ''
+    assert stale['segment'] == 0 and stale['segment_count'] == 1
