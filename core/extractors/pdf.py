@@ -67,5 +67,8 @@ def extract_pdf(
                 result_path, "EXTRACTED", text=text,
                 reason="PARTIAL_OCR_REQUIRED" if requires_ocr else None,
             )
-    except (pymupdf.FileDataError, pymupdf.EmptyFileError, RuntimeError, ValueError) as error:
+    except (
+        pymupdf.FileDataError, pymupdf.EmptyFileError,
+        pymupdf.mupdf.FzErrorBase, RuntimeError, ValueError,
+    ) as error:
         return TextExtractionResult(result_path, "FAILED", reason="INVALID_PDF", error=str(error))
