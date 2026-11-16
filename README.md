@@ -4,7 +4,7 @@
 
 파일을 폴더 경로가 아닌 내용과 의미, 관계를 중심으로 탐색하는 로컬 기반 파일 관리·분석 시스템입니다.
 
-File Network는 PC에 저장된 파일을 스캔하고 메타데이터를 로컬 데이터베이스에 관리합니다. 향후 문서 내용 검색과 파일 간 관계 분석, 생성형 AI 기반 질의응답 및 비교 기능으로 확장하는 것을 목표로 합니다.
+File Network는 PC에 저장된 파일을 스캔하고 메타데이터를 로컬 데이터베이스에 관리합니다. 현재 텍스트·소스 코드·PDF의 내용 추출과 본문 검색을 제공하며, 파일 간 관계 분석과 생성형 AI 기반 질의응답·비교 기능으로 확장하는 것을 목표로 합니다.
 
 ---
 
@@ -137,10 +137,10 @@ AI가 파일 시스템이나 SQLite에 직접 접근하지 않습니다. AI는 �
 | 기술 | 용도 | 상태 |
 |---|---|---|
 | Python | 파일 스캔 및 핵심 엔진 | 사용 중 |
-| SQLite | 로컬 파일 메타데이터 저장 | 사용 중 |
+| SQLite | 로컬 메타데이터·본문·분석 상태 저장 | 사용 중 |
 | pytest | 테스트 | 사용 중 |
-| SQLite FTS5 | 전문 검색 | 도입 예정 |
-| PyMuPDF | PDF 텍스트 추출 | 도입 예정 |
+| SQLite FTS5 | 저장된 본문 검색 | 사용 중 |
+| PyMuPDF | PDF 텍스트 레이어 추출 | 사용 중 |
 | python-docx | DOCX 텍스트 추출 | 도입 예정 |
 | python-pptx | PPTX 텍스트 추출 | 도입 예정 |
 | openpyxl | XLSX 데이터 추출 | 도입 예정 |
@@ -150,25 +150,30 @@ AI가 파일 시스템이나 SQLite에 직접 접근하지 않습니다. AI는 �
 | PySide6 | 데스크톱 UI | 도입 예정 |
 | Cytoscape.js | 파일 관계 시각화 | 도입 예정 |
 
-현재 `requirements.txt`에 명시된 기본 개발 의존성은 `pytest`입니다. 향후 기능을 추가할 때 실제 사용하는 라이브러리를 의존성 목록에 반영합니다.
+`requirements.txt`에는 PDF 추출용 `PyMuPDF`와 테스트용 `pytest`를 명시합니다. PDF 지원을 업데이트한 뒤에는 `python -m pip install -r requirements.txt`를 다시 실행합니다.
 
 ## 6. 프로젝트 구조
 
 ```text
 file-network/
-├── .github/
-│   └── workflows/
-│       └── ci.yml
+├── .github/workflows/ci.yml
 ├── app/
-│   ├── __init__.py
 │   ├── main.py
-│   └── incremental_scan.py
+│   ├── incremental_scan.py
+│   ├── extract_text.py
+│   ├── analyze_content.py
+│   └── search_content.py
 ├── core/
-│   └── scanner/
-│       └── scanner.py
+│   ├── scanner/scanner.py
+│   └── extractors/
+│       ├── text.py
+│       ├── pdf.py
+│       └── content.py
 ├── database/
 │   ├── db.py
-│   └── scan_sessions.py
+│   ├── scan_sessions.py
+│   ├── file_contents.py
+│   └── content_search.py
 ├── tests/
 ├── requirements.txt
 ├── README.md
@@ -181,7 +186,7 @@ file-network/
 
 ### 7.1 사전 요구 사항
 
-- Python 3.9 이상 권장
+- Python 3.12 권장 (Linux·macOS·Windows CI 검증 버전)
 - Git
 - Windows 명령 프롬프트(CMD), PowerShell 또는 macOS/Linux 터미널
 
@@ -307,9 +312,48 @@ database/file_network.db
 - 프로젝트 코드 폴더 전체를 무심코 스캔하지 말고 별도의 테스트 디렉터리로 먼저 검증하는 것을 권장합니다.
 - Windows 등의 파일 시스템에서 파일 식별자가 SQLite 정수 범위를 넘는 경우에도 정밀도를 보존해 저장합니다. 범위 초과 값은 `int:` 접두사의 텍스트로 저장하고 앱의 DB 연결에서 정수로 복원합니다. 기존 DB 삭제나 재생성은 필요하지 않습니다.
 
+### 7.9 내용 추출·DB 저장·검색
+
+`app.main`은 메타데이터 수집만 수행합니다. 변경·삭제·이동 추적은 `app.incremental_scan`을 사용하고, 본문까지 분석하려면 `app.analyze_content`를 사용합니다.
+
+**Windows CMD**
+
+```cmd
+python -m app.extract_text "%USERPROFILE%\file-network-test\example.pdf" --max-bytes 10485760
+python -m app.analyze_content "%USERPROFILE%\file-network-test" --max-bytes 10485760
+python -m app.search_content "Hello" --limit 10
+```
+
+**macOS / Linux**
+
+```bash
+python -m app.extract_text "$HOME/file-network-test/example.pdf" --max-bytes 10485760
+python -m app.analyze_content "$HOME/file-network-test" --max-bytes 10485760
+python -m app.search_content "Hello" --limit 10
+```
+
+- 단일 파일 추출은 JSON을 출력합니다. 일괄 분석은 먼저 증분 스캔한 뒤 본문·분석 상태·사유를 `file_contents`에 저장합니다. 원본은 수정하지 않습니다.
+- 텍스트·코드는 UTF-8 및 UTF-8 BOM을 지원합니다. PDF는 PyMuPDF로 텍스트 레이어를 페이지 순서대로 추출하고 페이지 사이를 폼 피드(`\f`)로 구분합니다. 페이지 끝 줄바꿈은 정규화하며 표·레이아웃을 원본 그대로 복원하지는 않습니다.
+- PDF도 기본 입력 크기 제한은 1 MiB이며 `--max-bytes`로 늘릴 수 있습니다. PDF 추출기의 기본 제한은 200페이지, 출력 1,000,000자입니다.
+- 암호가 필요한 PDF는 `ENCRYPTED_PDF`, 이미지 전용 PDF는 `OCR_REQUIRED`, 본문이 없는 PDF는 `NO_TEXT`로 건너뜁니다. 손상 PDF는 `INVALID_PDF` 실패 사유로 기록합니다. 텍스트 페이지와 무텍스트 이미지 페이지가 섞이면 읽을 수 있는 본문을 저장하고 `PARTIAL_OCR_REQUIRED` 사유를 남깁니다. OCR·암호 입력은 아직 제공하지 않습니다.
+- 상태는 `EXTRACTED`·`SKIPPED`·`FAILED`로 구분합니다. 실패 파일은 다음 실행에서 재시도하며 크기 제한·추출기 버전 또는 원본 메타데이터가 바뀌면 재분석합니다. PDF 지원 업데이트 후 기존 캐시는 한 차례 재분석될 수 있습니다.
+- 변경·삭제가 스캔에서 확인되면 이전 본문을 비우고 `STALE`로 표시합니다. 같은 확장자의 이동은 파일 ID와 본문을 유지합니다. 내용 해시는 사용하지 않으므로 모든 비교 메타데이터가 동일한 내용 변경은 감지하지 못합니다.
+- 검색은 저장된 활성 파일의 `EXTRACTED` 본문만 대상으로 합니다. 여러 검색어는 AND로 처리하며 `--root`로 디렉터리 범위를 제한할 수 있습니다. 관련도·현재 경로·일치 미리보기를 JSON으로 반환합니다. 한국어 형태소·임의 부분 문자열·의미 검색은 아직 제공하지 않습니다.
+- 본문 분석 실패가 있으면 종료 코드 1, 성공·건너뛰기는 0입니다. 잘못된 인자는 2이며 지원하지 않는 문서 형식은 메타데이터만 관리합니다.
+- `Ctrl+C`로 증분 스캔을 취소하면 세션을 `CANCELLED`로 기록하고 코드 130으로 종료합니다. 취소 전 완료된 DB 변경은 유지됩니다. 강제 종료·전원 차단 시 중단된 세션 복구는 후속 작업입니다.
+- 이동·삭제 건수는 스캔 이력에 저장하며 CLI에서 활성 파일 수와 전체 레코드 수를 구분합니다. 내용 분석은 로컬에서 처리하고 외부 AI API를 호출하지 않습니다.
+
+### 7.10 테스트
+
+```bash
+python -m pytest -v
+```
+
+GitHub Actions에서 Python 3.12로 Ubuntu 24.04·macOS 15·Windows Server 2022의 문법 검사와 전체 테스트를 실행합니다.
+
 ## 8. 개발 현황
 
-아래 항목은 현재까지 진행된 구현을 기준으로 정리합니다. 문서 추출, 의미 검색, 생성형 AI 연동 등 아직 구현되지 않은 기능은 완료 항목으로 표시하지 않습니다.
+현재 구현과 향후 계획을 구분합니다. PDF 텍스트 레이어 추출까지 구현했으며, Office·OCR·의미 검색·AI 연동·GUI는 아직 구현하지 않았습니다.
 
 ### 구현된 기능
 
@@ -323,12 +367,18 @@ database/file_network.db
 - [x] 파일 삭제 감지 및 소프트 삭제 처리
 - [x] 파일 이동 감지 및 기존 레코드 갱신
 - [x] 접근 오류가 있는 불완전한 스캔에서 오삭제를 방지하는 처리
+- [x] 스캔 취소 및 이동·삭제 통계 저장
+- [x] UTF-8 텍스트·코드 및 PDF 본문 추출
+- [x] 본문·분석 상태 DB 저장 및 변경·삭제 시 무효화
+- [x] 증분 일괄 분석·실패 재시도·결과 캐시
+- [x] SQLite FTS5 본문 검색 및 CLI
+- [x] Windows/macOS/Linux 자동 테스트
 
 ### 향후 개발 항목
 
-- [ ] 문서 형식별 텍스트 추출기 구현
-- [ ] 파일 내용 및 청크 데이터 관리
-- [ ] SQLite FTS5 기반 전문 검색
+- [ ] DOCX·PPTX·XLSX 문서 추출기
+- [ ] 이미지 전용 PDF OCR
+- [ ] 문서 청크 및 페이지별 인용 데이터 관리
 - [ ] 임베딩 기반 의미 검색
 - [ ] 생성형 AI API 연동
 - [ ] 문서 요약 및 질의응답
@@ -337,7 +387,7 @@ database/file_network.db
 - [ ] 로컬 전용 모드
 - [ ] PySide6 데스크톱 UI
 - [ ] 파일 관계 그래프 시각화
-- [ ] Windows/macOS 환경별 자동 테스트 확대
+- [ ] 설치 패키지·업데이트·대용량 파일 성능 검증
 
 ## 9. Git 협업 규칙
 
