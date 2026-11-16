@@ -22,6 +22,7 @@ from app.analyze_content import run_content_analysis
 from app.analysis_details import STATUS_LABELS, format_analysis_detail, reason_label
 from core.operations import check_cancelled
 from database.content_search import search_content
+from database.file_search import search_filename
 from database.file_contents import list_analysis_results
 
 
@@ -60,6 +61,7 @@ class MainWindow(QMainWindow):
         self._kind = None
         self._outcome = None
         self._view_mode = "search"
+        self._search_target = "content"
 
         self.folder = QLineEdit()
         self.folder.setPlaceholderText("분석하거나 검색할 폴더를 선택하세요")
@@ -82,6 +84,11 @@ class MainWindow(QMainWindow):
         self.query = QLineEdit()
         self.query.setPlaceholderText("본문 검색어 — 여러 단어는 모두 포함하는 문서 검색")
         self.query.returnPressed.connect(self.start_search)
+        self.search_target = QComboBox()
+        self.search_target.addItem("본문", "content")
+        self.search_target.addItem("파일명", "name")
+        self.search_target.setToolTip("파일명 검색은 본문 미분석·미지원 파일도 포함합니다.")
+        self.search_target.currentIndexChanged.connect(self._update_search_hint)
         self.all_folders = QCheckBox("모든 분석 폴더")
         self.all_folders.setToolTip("검색과 분석 내역을 저장된 전체 폴더 범위에서 조회")
         self.limit = QSpinBox()
@@ -90,7 +97,7 @@ class MainWindow(QMainWindow):
         self.search = QPushButton("검색")
         self.search.clicked.connect(self.start_search)
         search_row = QHBoxLayout()
-        for widget in (self.query, self.all_folders, QLabel("최대 결과"), self.limit, self.search):
+        for widget in (self.search_target, self.query, self.all_folders, QLabel("최대 결과"), self.limit, self.search):
             search_row.addWidget(widget)
 
         self.analysis_filter = QComboBox()
@@ -115,7 +122,7 @@ class MainWindow(QMainWindow):
         self.table.itemDoubleClicked.connect(lambda *_: self.open_selected())
         self.preview = QPlainTextEdit()
         self.preview.setReadOnly(True)
-        self.preview.setPlaceholderText("검색 결과를 선택하면 일치한 본문을 표시합니다.")
+        self.preview.setPlaceholderText("검색 결과를 선택하면 일치 본문 또는 파일명을 표시합니다.")
         splitter = QSplitter(Qt.Orientation.Vertical)
         splitter.addWidget(self.table)
         splitter.addWidget(self.preview)
@@ -178,6 +185,14 @@ class MainWindow(QMainWindow):
         ))
 
     @Slot()
+    def _update_search_hint(self):
+        self.query.setPlaceholderText(
+            "파일명 검색어 — 여러 단어를 모두 포함하는 이름 검색"
+            if self.search_target.currentData() == "name"
+            else "본문 검색어 — 여러 단어는 모두 포함하는 문서 검색"
+        )
+
+    @Slot()
     def start_search(self):
         if self.worker is not None:
             return
@@ -191,7 +206,9 @@ class MainWindow(QMainWindow):
             self.status.setText(str(error))
             return
         limit = self.limit.value()
-        self._start_task("search", lambda cancelled, progress: search_content(query, limit=limit, root_path=root))
+        self._search_target = self.search_target.currentData()
+        search = search_filename if self._search_target == "name" else search_content
+        self._start_task("search", lambda cancelled, progress: search(query, limit=limit, root_path=root))
 
     @Slot()
     def start_details(self):
@@ -224,7 +241,7 @@ class MainWindow(QMainWindow):
         self.worker.start()
 
     def _set_busy(self, busy):
-        for widget in (self.folder, self.browse, self.max_size, self.analyze, self.query, self.all_folders, self.limit, self.search, self.table, self.analysis_filter, self.details_button):
+        for widget in (self.folder, self.browse, self.max_size, self.analyze, self.query, self.search_target, self.all_folders, self.limit, self.search, self.table, self.analysis_filter, self.details_button):
             widget.setEnabled(not busy)
         self.open_button.setEnabled(not busy and self.table.currentRow() >= 0)
         self.cancel.setEnabled(busy)
@@ -284,7 +301,8 @@ class MainWindow(QMainWindow):
             self._view_mode = self._kind
             details = self._view_mode == "details"
             self.table.setColumnCount(4 if details else 3)
-            self.table.setHorizontalHeaderLabels(["파일명", "상태", "사유", "경로"] if details else ["파일명", "경로", "일치 본문"])
+            match_label = "일치 파일명" if self._search_target == "name" else "일치 본문"
+            self.table.setHorizontalHeaderLabels(["파일명", "상태", "사유", "경로"] if details else ["파일명", "경로", match_label])
             self.table.setRowCount(len(result))
             for row_index, row in enumerate(result):
                 values = (
