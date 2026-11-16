@@ -2,6 +2,8 @@ import os
 from pathlib import Path
 from datetime import datetime, timezone
 
+from core.operations import check_cancelled
+
 
 def classify_file(extension):
     extension = extension.lower()
@@ -59,7 +61,7 @@ def classify_file(extension):
     return "OTHER"
 
 
-def scan_directory(root_path, batch_size=500, scan_stats=None):
+def scan_directory(root_path, batch_size=500, scan_stats=None, is_cancelled=None):
     root = Path(root_path).expanduser().resolve()
 
     if not root.exists():
@@ -80,11 +82,13 @@ def scan_directory(root_path, batch_size=500, scan_stats=None):
     scanned_count = 0
 
     while stack:
+        check_cancelled(is_cancelled)
         current_path = stack.pop()
 
         try:
             with os.scandir(current_path) as entries:
                 for entry in entries:
+                    check_cancelled(is_cancelled)
                     try:
                         if entry.is_symlink():
                             continue
@@ -143,6 +147,7 @@ def scan_directory(root_path, batch_size=500, scan_stats=None):
             scan_stats["directory_error_count"] += 1
 
     if batch:
+        check_cancelled(is_cancelled)
         yield batch
 
     print(f"발견한 파일: {scanned_count:,}개")
