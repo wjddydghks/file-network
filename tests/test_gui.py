@@ -243,6 +243,79 @@ def test_gui_details_show_pending_files_scope_and_limit(application, window):
     assert "최대 1개" in view.status.text()
 
 
+def test_gui_filename_search_unextracted_files_and_switch_to_content(application, window, monkeypatch):
+    from app.incremental_scan import run_incremental_scan
+
+    view, root = window
+    (root / 'needle image.png').write_bytes(b'\xff')
+    (root / 'text.txt').write_text('needle body', encoding='utf-8')
+    run_content_analysis(root)
+    view.query.setText('needle')
+    view.search_target.setCurrentIndex(view.search_target.findData('name'))
+    assert '파일명' in view.query.placeholderText()
+    view.start_search()
+    assert not view.search_target.isEnabled()
+    wait_until(application, lambda: view.worker is None)
+    assert view.search_target.isEnabled()
+    assert view.table.rowCount() == 1
+    assert view.table.horizontalHeaderItem(2).text() == '일치 파일명'
+    assert view.preview.toPlainText() == 'needle image.png'
+    opened = []
+    monkeypatch.setattr(gui.QDesktopServices, 'openUrl', lambda url: opened.append(url.toLocalFile()) or True)
+    view.open_selected()
+    assert [Path(path) for path in opened] == [root / 'needle image.png']
+    view.start_details()
+    wait_until(application, lambda: view.worker is None)
+    assert view.table.columnCount() == 4
+    view.search_target.setCurrentIndex(view.search_target.findData('content'))
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    assert view.table.rowCount() == 1
+    assert view.table.horizontalHeaderItem(2).text() == '일치 본문'
+    assert '[needle]' in view.preview.toPlainText()
+    # Metadata-only files can also be found without any content analysis.
+    (root / 'pending needle.zip').write_bytes(b'\xff')
+    run_incremental_scan(root)
+    view.search_target.setCurrentIndex(view.search_target.findData('name'))
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    assert view.table.rowCount() == 2
+
+
+def test_gui_filename_scope_limit_and_error_recovery(application, window, monkeypatch):
+    from app.incremental_scan import run_incremental_scan
+
+    view, root = window
+    sibling = root.parent / 'outside'
+    sibling.mkdir()
+    for folder in (root, sibling):
+        (folder / 'keyword.png').write_bytes(b'\xff')
+        run_incremental_scan(folder)
+    view.search_target.setCurrentIndex(view.search_target.findData('name'))
+    view.query.setText('keyword')
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    assert view.table.rowCount() == 1
+    view.all_folders.setChecked(True)
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    assert view.table.rowCount() == 2
+    view.limit.setValue(1)
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    assert view.table.rowCount() == 1
+
+    def fail(*args, **kwargs):
+        raise RuntimeError('파일명 검색 오류')
+
+    monkeypatch.setattr(gui, 'search_filename', fail)
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    assert '파일명 검색 오류' in view.status.text()
+    assert view.search_target.isEnabled()
+    assert view.search.isEnabled()
+
+
 def test_gui_details_error_restores_controls(application, window, monkeypatch):
     view, _ = window
 
