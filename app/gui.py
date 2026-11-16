@@ -12,7 +12,11 @@ try:
         QSpinBox, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
     )
 except ImportError as error:
-    raise SystemExit("GUI 의존성을 설치하세요: python -m pip install -r requirements-gui.txt") from error
+    raise SystemExit(
+        f"GUI를 불러올 수 없습니다: {error}\n"
+        "python -m pip install -r requirements-gui.txt를 실행하고, "
+        "Linux에서는 README의 Qt 시스템 라이브러리 안내도 확인하세요."
+    ) from error
 
 from app.analyze_content import run_content_analysis
 from core.operations import check_cancelled

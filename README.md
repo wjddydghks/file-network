@@ -363,6 +363,12 @@ python -m pip install -r requirements-gui.txt
 python -m app.gui
 ```
 
+Ubuntu/Debian 데스크톱에서 Qt 시스템 라이브러리가 없다는 오류가 나면 다음 런타임도 설치합니다. Windows/macOS에서는 이 명령이 필요하지 않습니다.
+
+```bash
+sudo apt-get install libegl1 libopengl0 libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-keysyms1
+```
+
 1. **폴더 선택**으로 분석할 디렉터리를 고릅니다. 경로를 직접 입력할 수도 있습니다.
 2. **스캔·분석**을 누르면 메타데이터 스캔과 본문 분석을 백그라운드에서 수행합니다. GUI의 파일별 크기 제한은 기본 10 MiB이며 변경할 수 있습니다.
 3. 완료 후 **본문 검색어**를 입력하고 **검색** 또는 Enter를 누릅니다. 기본은 선택 폴더 범위이며 **모든 분석 폴더 검색**을 켜면 저장된 전체 범위를 검색합니다.
