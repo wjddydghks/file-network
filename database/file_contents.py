@@ -1,4 +1,6 @@
 from datetime import datetime, timezone
+from os import sep
+from pathlib import Path
 
 from database import db
 
@@ -67,3 +69,41 @@ def save_file_content(file_id, result, source_fingerprint):
             file_id, result.status, result.text, result.reason, result.error,
             source_fingerprint, datetime.now(timezone.utc).isoformat(),
         ))
+
+
+ANALYSIS_STATUSES = ("EXTRACTED", "SKIPPED", "FAILED", "STALE", "PENDING")
+
+
+def list_analysis_results(root_path=None, status=None, limit=100):
+    """본문을 읽지 않고 활성 파일의 마지막 분석 상태를 조회한다."""
+    if status is not None and status not in ANALYSIS_STATUSES:
+        raise ValueError("지원하지 않는 분석 상태입니다.")
+    if not isinstance(limit, int) or not 1 <= limit <= 1000:
+        raise ValueError("조회 건수는 1~1000 사이의 정수여야 합니다.")
+    db.initialize_database()
+    initialize_file_contents()
+    conditions = ["files.scan_status != 'DELETED'"]
+    parameters = []
+    if root_path is not None:
+        root = str(Path(root_path).expanduser().resolve())
+        prefix = root.rstrip(sep) + sep
+        conditions.append("(files.path = ? OR substr(files.path, 1, ?) = ?)")
+        parameters.extend((root, len(prefix), prefix))
+    if status is not None:
+        conditions.append("COALESCE(file_contents.status, 'PENDING') = ?")
+        parameters.append(status)
+    parameters.append(limit)
+    with db.get_connection() as connection:
+        rows = connection.execute(f"""
+            SELECT files.id AS file_id, files.name, files.path,
+                   COALESCE(file_contents.status, 'PENDING') AS status,
+                   file_contents.reason, file_contents.error, file_contents.analyzed_at
+            FROM files LEFT JOIN file_contents ON files.id = file_contents.file_id
+            WHERE {' AND '.join(conditions)}
+            ORDER BY CASE COALESCE(file_contents.status, 'PENDING')
+                WHEN 'FAILED' THEN 0 WHEN 'SKIPPED' THEN 1
+                WHEN 'STALE' THEN 2 WHEN 'PENDING' THEN 3 ELSE 4 END,
+                files.path
+            LIMIT ?
+        """, parameters).fetchall()
+        return [dict(row) for row in rows]
