@@ -249,6 +249,36 @@ def test_gui_unified_search_scope_limit_and_error_recovery(application, window, 
     assert not view.content_button.isEnabled()
 
 
+@pytest.mark.parametrize('selected_encoding', ['auto', 'cp949'])
+def test_gui_windows_text_encoding_analysis_search_and_preview(application, window, selected_encoding):
+    import codecs
+    view, root = window
+    text = '한글 keyword'
+    original = text.encode('cp949') if selected_encoding == 'cp949' else codecs.BOM_UTF16_LE + text.encode('utf-16-le')
+    path = root / '한글.txt'
+    path.write_bytes(original)
+    if selected_encoding == 'cp949':
+        view.start_analysis()
+        wait_until(application, lambda: view.worker is None)
+        assert '실패 1' in view.status.text()
+    view.text_encoding.setCurrentIndex(view.text_encoding.findData(selected_encoding))
+    view.start_analysis()
+    assert not view.text_encoding.isEnabled()
+    wait_until(application, lambda: view.worker is None)
+    assert '추출 1' in view.status.text()
+    assert view.text_encoding.isEnabled()
+    view.query.setText('한글')
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    assert view.table.rowCount() == 1
+    assert '[한글]' in view.preview.toPlainText()
+    view.start_content_preview()
+    wait_until(application, lambda: view.worker is None)
+    assert view.content_dialog.body.toPlainText() == text
+    view.content_dialog.close()
+    assert path.read_bytes() == original
+
+
 def test_gui_real_text_and_pdf_analysis_search_preview_and_open(application, window, monkeypatch):
     view, root = window
     (root / "note.txt").write_text("Hello needle", encoding="utf-8")
@@ -333,7 +363,7 @@ def test_gui_worker_failure_restores_controls(application, window, monkeypatch):
 
 
 def slow_analysis(started):
-    def operation(root, max_bytes, is_cancelled, progress_callback):
+    def operation(root, max_bytes, is_cancelled, progress_callback, text_encoding="auto"):
         started.set()
         progress_callback({"phase": "scan", "processed": 10})
         while not is_cancelled():
