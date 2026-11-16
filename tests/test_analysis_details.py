@@ -15,7 +15,7 @@ def report_root(tmp_path, monkeypatch):
     (root / "nested").mkdir()
     (root / "nested" / "good.txt").write_text("hello", encoding="utf-8")
     (root / "bad.txt").write_bytes(b"\xff")
-    (root / "unsupported.docx").write_bytes(b"docx")
+    (root / "unsupported.doc").write_bytes(b"docx")
     (root / "large.txt").write_text("123456789", encoding="utf-8")
     (root / "stale.txt").write_text("old", encoding="utf-8")
     (root / "deleted.txt").write_text("delete", encoding="utf-8")
@@ -43,7 +43,7 @@ def test_analysis_report_has_all_states_without_body_or_deleted_files(report_roo
     by_name = {row["name"]: row for row in rows}
     assert {name: row["status"] for name, row in by_name.items()} == {
         "good.txt": "EXTRACTED", "bad.txt": "FAILED",
-        "unsupported.docx": "SKIPPED", "large.txt": "SKIPPED",
+        "unsupported.doc": "SKIPPED", "large.txt": "SKIPPED",
         "stale.txt": "STALE", "pending.txt": "PENDING",
     }
     assert rows[0]["status"] == "FAILED"

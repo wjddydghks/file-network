@@ -31,7 +31,7 @@ def test_batch_results_are_stored_and_only_failures_retried(content_root, monkey
     inputs = {
         "hello.txt": "한글".encode("utf-8"),
         "code.py": b"pass",
-        "paper.docx": b"docx",
+        "paper.doc": b"docx",
         "binary.txt": b"a\x00b",
         "large.txt": b"123456789",
         "invalid.txt": b"\xff",
@@ -42,7 +42,7 @@ def test_batch_results_are_stored_and_only_failures_retried(content_root, monkey
     assert counts == {"extracted": 2, "skipped": 3, "failed": 1, "unchanged": 0}
     rows = {row["name"]: row for row in content_rows()}
     assert rows["hello.txt"]["text"] == "한글"
-    assert rows["paper.docx"]["reason"] == "UNSUPPORTED_TYPE"
+    assert rows["paper.doc"]["reason"] == "UNSUPPORTED_TYPE"
     assert rows["binary.txt"]["reason"] == "BINARY_CONTENT"
     assert rows["large.txt"]["reason"] == "TOO_LARGE"
     assert rows["invalid.txt"]["reason"] == "INVALID_ENCODING"
@@ -105,7 +105,7 @@ def test_extension_change_invalidates_cache(content_root):
     path.write_text("hello", encoding="utf-8")
     analyze_content.run_content_analysis(content_root)
     original_id = content_rows()[0]["id"]
-    path.rename(content_root / "after.docx")
+    path.rename(content_root / "after.doc")
     counts = analyze_content.run_content_analysis(content_root)
     row = content_rows()[0]
     assert counts["skipped"] == 1

@@ -18,7 +18,7 @@ def positive_integer(value):
 
 def main():
     parser = argparse.ArgumentParser(description="File Network - File Content Extractor")
-    parser.add_argument("path", help="내용을 추출할 텍스트·소스 코드 또는 PDF 파일")
+    parser.add_argument("path", help="내용을 추출할 텍스트·소스 코드·PDF·Office 파일")
     parser.add_argument(
         "--max-bytes", type=positive_integer, default=DEFAULT_MAX_BYTES,
         help="최대 파일 크기 (바이트, 기본 1048576)",

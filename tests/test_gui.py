@@ -313,7 +313,7 @@ def test_gui_analysis_details_filter_reasons_open_and_switch_to_search(applicati
     view, root = window
     (root / "good.txt").write_text("Hello keyword", encoding="utf-8")
     (root / "broken.txt").write_bytes(b"\xff")
-    (root / "unsupported.docx").write_bytes(b"docx")
+    (root / "unsupported.doc").write_bytes(b"docx")
     view.start_analysis()
     wait_until(application, lambda: view.worker is None)
     assert "실패 1" in view.status.text()
@@ -333,7 +333,7 @@ def test_gui_analysis_details_filter_reasons_open_and_switch_to_search(applicati
     opened = []
     monkeypatch.setattr(gui.QDesktopServices, "openUrl", lambda url: opened.append(url.toLocalFile()) or True)
     QTest.mouseClick(view.open_button, Qt.MouseButton.LeftButton)
-    assert [Path(path) for path in opened] == [root / "unsupported.docx"]
+    assert [Path(path) for path in opened] == [root / "unsupported.doc"]
     view.query.setText("Hello")
     view.start_search()
     wait_until(application, lambda: view.worker is None)
@@ -454,3 +454,26 @@ def test_gui_details_error_restores_controls(application, window, monkeypatch):
     assert view.details_button.isEnabled()
     assert view.analysis_filter.isEnabled()
     assert not view.cancel.isEnabled()
+
+
+def test_gui_office_analysis_search_and_invalid_document_details(application, window):
+    from tests.office_fixtures import make_office
+
+    view, root = window
+    for extension in (".docx", ".xlsx", ".pptx"):
+        make_office(root / ("sample" + extension), "Officekeyword 한글")
+    (root / "broken.docx").write_bytes(b"broken")
+    view.start_analysis()
+    wait_until(application, lambda: view.worker is None)
+    assert "추출 3" in view.status.text()
+    assert "실패 1" in view.status.text()
+    view.query.setText("Officekeyword")
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    assert view.table.rowCount() == 3
+    assert "Officekeyword" in view.preview.toPlainText()
+    view.analysis_filter.setCurrentIndex(view.analysis_filter.findData("FAILED"))
+    view.start_details()
+    wait_until(application, lambda: view.worker is None)
+    assert view.table.rowCount() == 1
+    assert "Office 문서 읽기·해석 실패" in view.preview.toPlainText()

@@ -11,7 +11,7 @@ from core.extractors.text import DEFAULT_MAX_BYTES, TextExtractionResult
 from database import db, file_contents
 
 
-EXTRACTOR_VERSION = 2
+EXTRACTOR_VERSION = 3
 
 
 def source_fingerprint(path, max_bytes):

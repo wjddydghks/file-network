@@ -23,6 +23,14 @@ REASON_LABELS = {
     "FILE_CHANGED_DURING_ANALYSIS": "분석 도중 파일 변경",
     "FILE_CHANGED": "스캔에서 파일 변경 확인",
     "FILE_DELETED": "스캔에서 파일 삭제 확인",
+    "INVALID_OFFICE": "Office 문서 읽기·해석 실패",
+    "ENCRYPTED_OFFICE": "암호화된 Office 문서",
+    "ENCRYPTED_OR_LEGACY_OFFICE": "암호화 또는 구형 Office 컨테이너",
+    "ARCHIVE_SIZE_LIMIT_EXCEEDED": "압축 해제 용량 제한 초과",
+    "ARCHIVE_MEMBER_LIMIT_EXCEEDED": "문서 내부 파일 수 제한 초과",
+    "CELL_LIMIT_EXCEEDED": "스프레드시트 셀 범위 제한 초과",
+    "SLIDE_LIMIT_EXCEEDED": "슬라이드 수 제한 초과",
+    "STRUCTURE_LIMIT_EXCEEDED": "문서 중첩 구조 제한 초과",
 }
 
 REASON_GUIDANCE = {
@@ -36,6 +44,9 @@ REASON_GUIDANCE = {
     "PARTIAL_OCR_REQUIRED": "읽을 수 있는 텍스트만 저장했습니다. 이미지 전용 페이지의 글자는 검색되지 않습니다.",
     "FILE_CHANGED_DURING_ANALYSIS": "파일 수정이 끝난 뒤 스캔·분석을 다시 실행하세요.",
     "FILE_CHANGED": "기존 본문은 무효화되었습니다. 스캔·분석을 다시 실행하세요.",
+    "INVALID_OFFICE": "파일이 실제 DOCX·XLSX·PPTX 형식인지, 손상되지 않았는지 확인하세요.",
+    "ENCRYPTED_OFFICE": "현재 Office 암호 입력은 지원하지 않습니다.",
+    "ENCRYPTED_OR_LEGACY_OFFICE": "암호화된 문서이거나 구형 OLE 형식입니다. 현재 암호 입력과 구형 형식 변환은 지원하지 않습니다.",
 }
 
 
