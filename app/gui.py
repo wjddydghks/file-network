@@ -23,7 +23,10 @@ from app.analysis_details import STATUS_LABELS, format_analysis_detail, reason_l
 from core.operations import check_cancelled
 from database.content_search import search_content
 from database.file_search import search_filename
+from database.unified_search import search_all
 from database.file_contents import get_content_preview, list_analysis_results
+
+MATCH_SOURCE_LABELS = {"content": "본문", "name": "파일명"}
 
 
 class ContentPreviewDialog(QDialog):
@@ -118,7 +121,8 @@ class MainWindow(QMainWindow):
         self.search_target = QComboBox()
         self.search_target.addItem("본문", "content")
         self.search_target.addItem("파일명", "name")
-        self.search_target.setToolTip("파일명 검색은 본문 미분석·미지원 파일도 포함합니다.")
+        self.search_target.addItem("통합 (본문·파일명)", "all")
+        self.search_target.setToolTip("통합 검색은 본문 일치를 우선하고 파일명 일치를 추가합니다. 같은 파일은 한 번 표시합니다.")
         self.search_target.currentIndexChanged.connect(self._update_search_hint)
         self.all_folders = QCheckBox("모든 분석 폴더")
         self.all_folders.setToolTip("검색과 분석 내역을 저장된 전체 폴더 범위에서 조회")
@@ -221,11 +225,12 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _update_search_hint(self):
-        self.query.setPlaceholderText(
-            "파일명 검색어 — 여러 단어를 모두 포함하는 이름 검색"
-            if self.search_target.currentData() == "name"
-            else "본문 검색어 — 여러 단어는 모두 포함하는 문서 검색"
-        )
+        hints = {
+            "content": "본문 검색어 — 여러 단어는 모두 포함하는 문서 검색",
+            "name": "파일명 검색어 — 여러 단어를 모두 포함하는 이름 검색",
+            "all": "통합 검색어 — 본문 또는 파일명에 모든 단어를 포함하는 파일 검색",
+        }
+        self.query.setPlaceholderText(hints[self.search_target.currentData()])
 
     @Slot()
     def start_search(self):
@@ -242,7 +247,7 @@ class MainWindow(QMainWindow):
             return
         limit = self.limit.value()
         self._search_target = self.search_target.currentData()
-        search = search_filename if self._search_target == "name" else search_content
+        search = {"content": search_content, "name": search_filename, "all": search_all}[self._search_target]
         self._start_task("search", lambda cancelled, progress: search(query, limit=limit, root_path=root))
 
     @Slot()
@@ -345,15 +350,24 @@ class MainWindow(QMainWindow):
             self._results = result
             self._view_mode = self._kind
             details = self._view_mode == "details"
-            self.table.setColumnCount(4 if details else 3)
+            unified = not details and self._search_target == "all"
             match_label = "일치 파일명" if self._search_target == "name" else "일치 본문"
-            self.table.setHorizontalHeaderLabels(["파일명", "상태", "사유", "경로"] if details else ["파일명", "경로", match_label])
+            if details:
+                headers = ["파일명", "상태", "사유", "경로"]
+            elif unified:
+                headers = ["파일명", "일치 위치", "경로", "일치 내용"]
+            else:
+                headers = ["파일명", "경로", match_label]
+            self.table.setColumnCount(len(headers))
+            self.table.setHorizontalHeaderLabels(headers)
             self.table.setRowCount(len(result))
             for row_index, row in enumerate(result):
-                values = (
-                    (row["name"], STATUS_LABELS.get(row["status"], row["status"]), reason_label(row), row["path"])
-                    if details else (row["name"], row["path"], row["snippet"])
-                )
+                if details:
+                    values = (row["name"], STATUS_LABELS.get(row["status"], row["status"]), reason_label(row), row["path"])
+                elif unified:
+                    values = (row["name"], MATCH_SOURCE_LABELS[row["match_source"]], row["path"], row["snippet"])
+                else:
+                    values = (row["name"], row["path"], row["snippet"])
                 for column, value in enumerate(values):
                     self.table.setItem(row_index, column, QTableWidgetItem(value or ""))
             if details:
@@ -370,7 +384,10 @@ class MainWindow(QMainWindow):
         index = self.table.currentRow()
         if 0 <= index < len(self._results):
             result = self._results[index]
-            self.preview.setPlainText(format_analysis_detail(result) if self._view_mode == "details" else result["snippet"] or "")
+            text = format_analysis_detail(result) if self._view_mode == "details" else result["snippet"] or ""
+            if self._view_mode != "details" and result.get("match_source"):
+                text = f"일치 위치: {MATCH_SOURCE_LABELS[result['match_source']]}\n\n{text}"
+            self.preview.setPlainText(text)
             self.selected_path.setText(result["path"])
             self.open_button.setEnabled(self.worker is None)
             self.content_button.setEnabled(self.worker is None)

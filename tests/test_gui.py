@@ -176,6 +176,79 @@ def test_gui_content_preview_cancel_and_close_wait_for_worker(application, windo
         assert view.content_button.isEnabled()
 
 
+def test_gui_unified_search_sources_dedup_preview_and_target_switch(application, window):
+    view, root = window
+    (root / 'needle.txt').write_text('needle body', encoding='utf-8')
+    (root / 'needle.png').write_bytes(b'\xff')
+    run_content_analysis(root)
+    view.query.setText('needle')
+    view.search_target.setCurrentIndex(view.search_target.findData('all'))
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    assert view.table.columnCount() == 4
+    assert view.table.rowCount() == 2
+    assert view.table.horizontalHeaderItem(1).text() == '일치 위치'
+    assert view.table.item(0, 1).text() == '본문'
+    assert view.table.item(1, 1).text() == '파일명'
+    assert '일치 위치: 본문' in view.preview.toPlainText()
+    assert '[needle]' in view.preview.toPlainText()
+    view.start_content_preview()
+    wait_until(application, lambda: view.worker is None)
+    assert view.content_dialog.body.toPlainText() == 'needle body'
+    view.content_dialog.close()
+    view.table.selectRow(1)
+    assert '일치 위치: 파일명' in view.preview.toPlainText()
+    assert 'needle.png' in view.preview.toPlainText()
+    view.start_details()
+    wait_until(application, lambda: view.worker is None)
+    assert view.table.horizontalHeaderItem(1).text() == '상태'
+    assert '일치 위치:' not in view.preview.toPlainText()
+    view.search_target.setCurrentIndex(view.search_target.findData('name'))
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    assert view.table.columnCount() == 3
+    assert view.table.rowCount() == 2
+    assert '일치 위치:' not in view.preview.toPlainText()
+    view.search_target.setCurrentIndex(view.search_target.findData('content'))
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    assert view.table.rowCount() == 1
+
+
+def test_gui_unified_search_scope_limit_and_error_recovery(application, window, monkeypatch):
+    view, root = window
+    sibling = root.parent / 'outside'
+    sibling.mkdir()
+    for folder in (root, sibling):
+        (folder / 'needle.png').write_bytes(b'\xff')
+        (folder / 'document.txt').write_text('needle body', encoding='utf-8')
+        run_content_analysis(folder)
+    view.query.setText('needle')
+    view.search_target.setCurrentIndex(view.search_target.findData('all'))
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    assert view.table.rowCount() == 2
+    view.all_folders.setChecked(True)
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    assert view.table.rowCount() == 4
+    view.limit.setValue(1)
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    assert view.table.rowCount() == 1
+    assert view._results[0]['match_source'] == 'content'
+
+    def fail(*args, **kwargs):
+        raise RuntimeError('통합 검색 오류')
+
+    monkeypatch.setattr(gui, 'search_all', fail)
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    assert '통합 검색 오류' in view.status.text()
+    assert view.search_target.isEnabled()
+    assert not view.content_button.isEnabled()
+
+
 def test_gui_real_text_and_pdf_analysis_search_preview_and_open(application, window, monkeypatch):
     view, root = window
     (root / "note.txt").write_text("Hello needle", encoding="utf-8")
