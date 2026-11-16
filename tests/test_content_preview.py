@@ -15,10 +15,11 @@ def root(tmp_path, monkeypatch):
     return folder
 
 
-def test_preview_reads_cached_unicode_text_without_source(root):
+@pytest.mark.parametrize('newline', ['\n', '\r\n'])
+def test_preview_reads_cached_unicode_text_without_source(root, newline):
     path = root / '한글.txt'
-    text = '앞부분\n한글 본문 😀\n뒷부분'
-    path.write_text(text, encoding='utf-8')
+    text = newline.join(['앞부분', '한글 본문 😀', '뒷부분'])
+    path.write_bytes(text.encode('utf-8'))
     run_content_analysis(root)
     file_id = search_filename('한글')[0]['file_id']
     path.unlink()  # No rescan: preview explicitly represents the last analysis.
