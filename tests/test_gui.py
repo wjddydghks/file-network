@@ -51,6 +51,131 @@ def window(application, tmp_path, monkeypatch):
     application.processEvents()
 
 
+def test_gui_stored_content_preview_preserves_search_and_handles_changed_file(application, window):
+    from app.incremental_scan import run_incremental_scan
+
+    view, root = window
+    path = root / 'note.txt'
+    text = 'start of document\n' + 'context ' * 100 + 'needle\nend of document'
+    path.write_text(text, encoding='utf-8')
+    run_content_analysis(root)
+    view.query.setText('needle')
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    snippet = view.preview.toPlainText()
+    view.start_content_preview()
+    assert not view.content_button.isEnabled()
+    wait_until(application, lambda: view.worker is None)
+    dialog = view.content_dialog
+    assert dialog.isVisible()
+    assert dialog.body.isReadOnly()
+    assert dialog.body.toPlainText() == text
+    assert '분석 완료' in dialog.details.toPlainText()
+    assert view.table.rowCount() == 1
+    assert view.table.currentRow() == 0
+    assert view.preview.toPlainText() == snippet
+    dialog.close()
+    path.write_text('changed document with longer body', encoding='utf-8')
+    run_incremental_scan(root)
+    view.start_content_preview()
+    wait_until(application, lambda: view.worker is None)
+    assert view.content_dialog.body.toPlainText() == ''
+    assert '재분석 필요' in view.content_dialog.details.toPlainText()
+    view.content_dialog.close()
+    path.unlink()
+    run_incremental_scan(root)
+    view.start_content_preview()
+    wait_until(application, lambda: view.worker is None)
+    assert '찾을 수 없습니다' in view.status.text()
+    assert view.content_button.isEnabled()
+
+
+def test_gui_preview_from_pending_details_and_truncation(application, window):
+    from app.incremental_scan import run_incremental_scan
+    from core.extractors.text import TextExtractionResult
+    from database import file_contents
+
+    view, root = window
+    path = root / 'pending.txt'
+    path.write_text('x', encoding='utf-8')
+    run_incremental_scan(root)
+    view.start_details()
+    wait_until(application, lambda: view.worker is None)
+    view.start_content_preview()
+    wait_until(application, lambda: view.worker is None)
+    assert '미분석' in view.content_dialog.details.toPlainText()
+    assert view.content_dialog.body.toPlainText() == ''
+    view.content_dialog.close()
+    text = '가' * (file_contents.MAX_PREVIEW_CHARS + 1)
+    file_id = view._results[0]['file_id']
+    file_contents.save_file_content(file_id, TextExtractionResult(str(path), 'EXTRACTED', text=text), 'test')
+    view.start_content_preview()
+    wait_until(application, lambda: view.worker is None)
+    assert len(view.content_dialog.body.toPlainText()) == file_contents.MAX_PREVIEW_CHARS
+    assert '100,001' in view.content_dialog.summary.text()
+    assert '앞 100,000자만' in view.content_dialog.summary.text()
+    assert view.table.columnCount() == 4
+    view.content_dialog.close()
+
+
+def test_gui_content_preview_error_restores_results_and_controls(application, window, monkeypatch):
+    view, root = window
+    (root / 'note.txt').write_text('needle', encoding='utf-8')
+    run_content_analysis(root)
+    view.query.setText('needle')
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+
+    def fail(file_id):
+        raise RuntimeError('본문 조회 오류')
+
+    monkeypatch.setattr(gui, 'get_content_preview', fail)
+    view.start_content_preview()
+    wait_until(application, lambda: view.worker is None)
+    assert '본문 조회 오류' in view.status.text()
+    assert view.table.rowCount() == 1
+    assert view.content_button.isEnabled()
+    assert view.search.isEnabled()
+    assert view.content_dialog is None
+
+
+@pytest.mark.parametrize('close_window', [False, True])
+def test_gui_content_preview_cancel_and_close_wait_for_worker(application, window, monkeypatch, close_window):
+    view, root = window
+    (root / 'note.txt').write_text('needle', encoding='utf-8')
+    run_content_analysis(root)
+    view.query.setText('needle')
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    started = Event()
+    release = Event()
+
+    def slow_preview(file_id):
+        started.set()
+        assert release.wait(5)
+        return None
+
+    monkeypatch.setattr(gui, 'get_content_preview', slow_preview)
+    view.start_content_preview()
+    wait_until(application, started.is_set)
+    heartbeat = []
+    QTimer.singleShot(0, lambda: heartbeat.append(True))
+    wait_until(application, lambda: bool(heartbeat))
+    if close_window:
+        view.close()
+    else:
+        view.cancel_task()
+    release.set()
+    wait_until(application, lambda: view.worker is None)
+    assert view.content_dialog is None
+    if close_window:
+        assert not view.isVisible()
+    else:
+        assert '취소' in view.status.text()
+        assert view.table.rowCount() == 1
+        assert view.content_button.isEnabled()
+
+
 def test_gui_real_text_and_pdf_analysis_search_preview_and_open(application, window, monkeypatch):
     view, root = window
     (root / "note.txt").write_text("Hello needle", encoding="utf-8")

@@ -7,7 +7,7 @@ try:
     from PySide6.QtCore import Qt, QThread, QUrl, Signal, Slot
     from PySide6.QtGui import QDesktopServices
     from PySide6.QtWidgets import (
-        QApplication, QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QHeaderView, QLabel,
+        QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QHBoxLayout, QHeaderView, QLabel,
         QLineEdit, QMainWindow, QPlainTextEdit, QProgressBar, QPushButton,
         QSpinBox, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
     )
@@ -23,7 +23,37 @@ from app.analysis_details import STATUS_LABELS, format_analysis_detail, reason_l
 from core.operations import check_cancelled
 from database.content_search import search_content
 from database.file_search import search_filename
-from database.file_contents import list_analysis_results
+from database.file_contents import get_content_preview, list_analysis_results
+
+
+class ContentPreviewDialog(QDialog):
+    def __init__(self, result, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("저장된 본문 미리보기")
+        self.setWindowModality(Qt.WindowModality.WindowModal)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        self.resize(850, 650)
+        note = QLabel("마지막 분석 시점에 저장된 텍스트입니다. 최신 원본과 다를 수 있습니다.")
+        note.setWordWrap(True)
+        self.details = QPlainTextEdit(format_analysis_detail(result))
+        self.details.setReadOnly(True)
+        self.details.setMaximumHeight(150)
+        count = f"저장된 본문 {result['total_chars']:,}자"
+        if result['truncated']:
+            count += f" — 앞 {len(result['text']):,}자만 표시합니다. 나머지는 원본 파일에서 확인하세요."
+        self.summary = QLabel(count)
+        self.summary.setWordWrap(True)
+        self.body = QPlainTextEdit()
+        self.body.setReadOnly(True)
+        self.body.setPlainText(result['text'])
+        self.body.setPlaceholderText("저장된 본문이 없습니다. 위의 분석 상태와 사유를 확인하세요.")
+        close = QPushButton("닫기")
+        close.clicked.connect(self.close)
+        layout = QVBoxLayout(self)
+        for widget in (note, self.details, self.summary):
+            layout.addWidget(widget)
+        layout.addWidget(self.body, 1)
+        layout.addWidget(close)
 
 
 class TaskThread(QThread):
@@ -62,6 +92,7 @@ class MainWindow(QMainWindow):
         self._outcome = None
         self._view_mode = "search"
         self._search_target = "content"
+        self.content_dialog = None
 
         self.folder = QLineEdit()
         self.folder.setPlaceholderText("분석하거나 검색할 폴더를 선택하세요")
@@ -134,8 +165,12 @@ class MainWindow(QMainWindow):
         self.open_button = QPushButton("원본 파일 열기")
         self.open_button.setEnabled(False)
         self.open_button.clicked.connect(self.open_selected)
+        self.content_button = QPushButton("저장된 본문 보기")
+        self.content_button.setEnabled(False)
+        self.content_button.clicked.connect(self.start_content_preview)
         open_row = QHBoxLayout()
         open_row.addWidget(self.selected_path, 1)
+        open_row.addWidget(self.content_button)
         open_row.addWidget(self.open_button)
         self.progress = QProgressBar()
         self.progress.setRange(0, 1)
@@ -226,11 +261,12 @@ class MainWindow(QMainWindow):
     def _start_task(self, kind, operation):
         self._kind = kind
         self._outcome = ("cancelled", None)
-        self._results = []
-        self.table.setRowCount(0)
-        self.update_preview()
+        if kind != "preview":
+            self._results = []
+            self.table.setRowCount(0)
+            self.update_preview()
         self._set_busy(True)
-        self.status.setText({"analysis": "스캔·분석 중…", "search": "검색 중…", "details": "분석 내역 조회 중…"}[kind])
+        self.status.setText({"analysis": "스캔·분석 중…", "search": "검색 중…", "details": "분석 내역 조회 중…", "preview": "저장된 본문 조회 중…"}[kind])
         self.progress.setRange(0, 0)
         self.worker = TaskThread(operation, self)
         self.worker.completed.connect(self._completed)
@@ -244,6 +280,7 @@ class MainWindow(QMainWindow):
         for widget in (self.folder, self.browse, self.max_size, self.analyze, self.query, self.search_target, self.all_folders, self.limit, self.search, self.table, self.analysis_filter, self.details_button):
             widget.setEnabled(not busy)
         self.open_button.setEnabled(not busy and self.table.currentRow() >= 0)
+        self.content_button.setEnabled(not busy and self.table.currentRow() >= 0)
         self.cancel.setEnabled(busy)
 
     @Slot()
@@ -296,6 +333,14 @@ class MainWindow(QMainWindow):
                 f"분석 완료 — 추출 {result['extracted']:,}, 기존 결과 재사용 {result['unchanged']:,}, "
                 f"건너뜀 {result['skipped']:,}, 실패 {result['failed']:,}개. 분석 내역에서 파일별 사유를 확인하세요."
             )
+        elif self._kind == "preview":
+            if result is None:
+                self.status.setText("저장된 파일을 찾을 수 없습니다. 검색 또는 분석 내역을 새로 조회하세요.")
+            elif not self._closing:
+                self.content_dialog = ContentPreviewDialog(result, self)
+                self.content_dialog.finished.connect(self._clear_content_dialog)
+                self.content_dialog.show()
+                self.status.setText("마지막 분석 시점의 저장된 본문을 표시합니다.")
         else:
             self._results = result
             self._view_mode = self._kind
@@ -328,10 +373,24 @@ class MainWindow(QMainWindow):
             self.preview.setPlainText(format_analysis_detail(result) if self._view_mode == "details" else result["snippet"] or "")
             self.selected_path.setText(result["path"])
             self.open_button.setEnabled(self.worker is None)
+            self.content_button.setEnabled(self.worker is None)
         else:
             self.preview.clear()
             self.selected_path.setText("선택된 파일 없음")
             self.open_button.setEnabled(False)
+            self.content_button.setEnabled(False)
+
+    @Slot()
+    def _clear_content_dialog(self):
+        self.content_dialog = None
+
+    @Slot()
+    def start_content_preview(self):
+        index = self.table.currentRow()
+        if self.worker is not None or not 0 <= index < len(self._results):
+            return
+        file_id = self._results[index]['file_id']
+        self._start_task("preview", lambda cancelled, progress: get_content_preview(file_id))
 
     @Slot()
     def open_selected(self):

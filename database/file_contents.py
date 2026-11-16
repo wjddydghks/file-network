@@ -72,6 +72,34 @@ def save_file_content(file_id, result, source_fingerprint):
 
 
 ANALYSIS_STATUSES = ("EXTRACTED", "SKIPPED", "FAILED", "STALE", "PENDING")
+MAX_PREVIEW_CHARS = 100_000
+
+
+def get_content_preview(file_id):
+    """활성 파일의 마지막 분석 결과를 반환하며 본문은 표시 길이만 조회한다."""
+    if type(file_id) is not int or not 1 <= file_id < 2**63:
+        raise ValueError("올바른 파일 ID를 지정하세요.")
+    db.initialize_database()
+    initialize_file_contents()
+    with db.get_connection() as connection:
+        row = connection.execute("""
+            SELECT files.id AS file_id, files.name, files.path,
+                   COALESCE(file_contents.status, 'PENDING') AS status,
+                   file_contents.reason, file_contents.error, file_contents.analyzed_at,
+                   CASE WHEN file_contents.status = 'EXTRACTED'
+                        THEN COALESCE(substr(file_contents.text, 1, ?), '')
+                        ELSE '' END AS text,
+                   CASE WHEN file_contents.status = 'EXTRACTED'
+                        THEN COALESCE(length(file_contents.text), 0)
+                        ELSE 0 END AS total_chars
+            FROM files LEFT JOIN file_contents ON files.id = file_contents.file_id
+            WHERE files.id = ? AND files.scan_status != 'DELETED'
+        """, (MAX_PREVIEW_CHARS, file_id)).fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        result['truncated'] = result['total_chars'] > MAX_PREVIEW_CHARS
+        return result
 
 
 def list_analysis_results(root_path=None, status=None, limit=100):
