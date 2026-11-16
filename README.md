@@ -147,10 +147,10 @@ AI가 파일 시스템이나 SQLite에 직접 접근하지 않습니다. AI는 �
 | Embedding API 또는 로컬 임베딩 모델 | 의미 벡터 생성 | 검토 예정 |
 | FAISS | 벡터 검색 | 검토 예정 |
 | 외부 생성형 AI API | 문서 요약·비교·질의응답 | 설계 단계 |
-| PySide6 | 데스크톱 UI | 도입 예정 |
+| PySide6 Essentials | 로컬 분석·검색 기본 GUI | 사용 중 |
 | Cytoscape.js | 파일 관계 시각화 | 도입 예정 |
 
-`requirements.txt`에는 PDF 추출용 `PyMuPDF`와 테스트용 `pytest`를 명시합니다. PDF 지원을 업데이트한 뒤에는 `python -m pip install -r requirements.txt`를 다시 실행합니다.
+`requirements.txt`에는 PDF 추출용 `PyMuPDF`와 테스트용 `pytest`를 명시합니다. PDF 지원을 업데이트한 뒤에는 `python -m pip install -r requirements.txt`를 다시 실행합니다. GUI를 사용할 때는 선택 의존성 파일 `requirements-gui.txt`를 설치합니다. CLI만 사용할 때는 Qt 설치가 필요하지 않습니다.
 
 ## 6. 프로젝트 구조
 
@@ -159,11 +159,13 @@ file-network/
 ├── .github/workflows/ci.yml
 ├── app/
 │   ├── main.py
+│   ├── gui.py
 │   ├── incremental_scan.py
 │   ├── extract_text.py
 │   ├── analyze_content.py
 │   └── search_content.py
 ├── core/
+│   ├── operations.py
 │   ├── scanner/scanner.py
 │   └── extractors/
 │       ├── text.py
@@ -176,6 +178,7 @@ file-network/
 │   └── content_search.py
 ├── tests/
 ├── requirements.txt
+├── requirements-gui.txt
 ├── README.md
 └── .gitignore
 ```
@@ -351,9 +354,32 @@ python -m pytest -v
 
 GitHub Actions에서 Python 3.12로 Ubuntu 24.04·macOS 15·Windows Server 2022의 문법 검사와 전체 테스트를 실행합니다.
 
+### 7.11 MVP GUI 실행
+
+프로젝트 루트에서 가상환경을 활성화한 뒤 실행합니다. Windows CMD·PowerShell 및 macOS/Linux에서 동일한 명령을 사용합니다.
+
+```bash
+python -m pip install -r requirements-gui.txt
+python -m app.gui
+```
+
+1. **폴더 선택**으로 분석할 디렉터리를 고릅니다. 경로를 직접 입력할 수도 있습니다.
+2. **스캔·분석**을 누르면 메타데이터 스캔과 본문 분석을 백그라운드에서 수행합니다. GUI의 파일별 크기 제한은 기본 10 MiB이며 변경할 수 있습니다.
+3. 완료 후 **본문 검색어**를 입력하고 **검색** 또는 Enter를 누릅니다. 기본은 선택 폴더 범위이며 **모든 분석 폴더 검색**을 켜면 저장된 전체 범위를 검색합니다.
+4. 결과를 선택하면 현재 경로와 일치 본문을 미리 봅니다. **원본 파일 열기** 또는 결과 더블클릭은 OS 기본 연결 앱을 사용합니다. GUI 미리보기는 검색 일치 부분이며 전체 문서 뷰어는 아닙니다.
+5. **취소**를 누르면 협력적으로 중단합니다. 현재 파일 추출·검색·DB 처리가 끝날 때까지 잠시 걸릴 수 있으며 이미 저장된 결과는 유지합니다. 작업 중 창을 닫아도 중단·스레드 종료를 기다린 뒤 닫습니다.
+
+분석·검색 중에는 중복 실행을 막기 위해 입력을 잠급니다. 취소·오류 후에는 다시 사용할 수 있으며 처리 건수, 건너뜀·실패 수를 표시합니다. 건너뛴 파일의 사유별 상세 화면과 설치 실행 파일은 후속 작업입니다. 기존 CLI와 같은 로컬 DB를 사용하고 외부 AI API를 호출하지 않습니다.
+
+GUI 자동 테스트는 `QT_QPA_PLATFORM=offscreen` 환경에서 실제 텍스트/PDF 엔진 연계, 결과 선택·열기 요청, 화면 응답·취소·창 닫기를 검증합니다. 기본 의존성만 설치한 환경에서는 GUI 테스트가 생략되며, GitHub Actions는 GUI 의존성을 설치하고 세 OS에서 엔진·GUI 테스트를 모두 실행합니다.
+
 ## 8. 개발 현황
 
-현재 구현과 향후 계획을 구분합니다. PDF 텍스트 레이어 추출까지 구현했으며, Office·OCR·의미 검색·AI 연동·GUI는 아직 구현하지 않았습니다.
+현재 구현과 향후 계획을 구분합니다. PDF 텍스트 레이어 추출까지 구현했으며, Office·OCR·의미 검색·AI 연동·관계 그래프는 아직 구현하지 않았습니다. 기본 분석·검색 GUI는 아래 MVP 범위로 제공합니다.
+
+### MVP 범위
+
+폴더 선택 → 백그라운드 스캔·분석 → 본문 검색 → 일치 본문 미리보기 → OS 기본 앱으로 원본 파일 열기를 우선 제공합니다. 고급 문서 형식·AI·관계 그래프와 설치 패키지는 후속 단계입니다.
 
 ### 구현된 기능
 
@@ -373,6 +399,8 @@ GitHub Actions에서 Python 3.12로 Ubuntu 24.04·macOS 15·Windows Server 2022�
 - [x] 증분 일괄 분석·실패 재시도·결과 캐시
 - [x] SQLite FTS5 본문 검색 및 CLI
 - [x] Windows/macOS/Linux 자동 테스트
+- [x] PySide6 기본 GUI: 폴더 선택·분석·검색·미리보기·파일 열기
+- [x] GUI 작업 스레드·진행 상태·협력적 취소 및 안전한 창 닫기
 
 ### 향후 개발 항목
 
@@ -385,7 +413,7 @@ GitHub Actions에서 Python 3.12로 Ubuntu 24.04·macOS 15·Windows Server 2022�
 - [ ] 여러 문서 간 비교 및 관계 분석
 - [ ] 외부 API 전송 승인 및 민감정보 보호 기능
 - [ ] 로컬 전용 모드
-- [ ] PySide6 데스크톱 UI
+- [ ] GUI 분석 오류 상세 보기·설정 저장 등 사용성 보완
 - [ ] 파일 관계 그래프 시각화
 - [ ] 설치 패키지·업데이트·대용량 파일 성능 검증
 

@@ -8,6 +8,7 @@ from database.scan_sessions import (
     finish_scan_session
 )
 from core.scanner.scanner import scan_directory
+from core.operations import check_cancelled
 
 
 def get_existing_files(files):
@@ -81,7 +82,7 @@ def get_identity(file):
     return device_id, inode
 
 
-def run_incremental_scan(root_path):
+def run_incremental_scan(root_path, is_cancelled=None, progress_callback=None):
     root = Path(root_path).expanduser().resolve()
 
     if not root.exists():
@@ -109,10 +110,13 @@ def run_incremental_scan(root_path):
     seen_paths = set()
 
     try:
+        check_cancelled(is_cancelled)
+        scan_options = {"batch_size": 500, "scan_stats": scan_stats}
+        if is_cancelled is not None:
+            scan_options["is_cancelled"] = is_cancelled
         for batch in scan_directory(
             str(root),
-            batch_size=500,
-            scan_stats=scan_stats
+            **scan_options
         ):
             discovered_count += len(batch)
 
@@ -138,6 +142,9 @@ def run_incremental_scan(root_path):
             if changed_files:
                 db.save_files(changed_files)
 
+            if progress_callback is not None:
+                progress_callback({"phase": "scan", "processed": discovered_count})
+
             print(
                 f"진행: {discovered_count:,}개 | "
                 f"신규: {new_count:,}개 | "
@@ -145,6 +152,7 @@ def run_incremental_scan(root_path):
                 f"변경 없음: {unchanged_count:,}개"
             )
 
+        check_cancelled(is_cancelled)
         error_count = scan_stats["error_count"]
 
         # 기존 DB에서 이번 스캔에 발견되지 않은 파일을 조회한다.
@@ -182,6 +190,7 @@ def run_incremental_scan(root_path):
         # 기존 파일 1개와 신규 파일 1개가
         # 동일한 파일 식별자를 가진 경우에만 이동으로 판정한다.
         for identity, old_group in old_identity_groups.items():
+            check_cancelled(is_cancelled)
             new_group = new_identity_groups.get(identity, [])
 
             if len(old_group) != 1 or len(new_group) != 1:
@@ -212,10 +221,12 @@ def run_incremental_scan(root_path):
         ]
 
         if remaining_new_files:
+            check_cancelled(is_cancelled)
             db.save_files(remaining_new_files)
 
         # 접근 오류가 없다면 삭제 파일을 판정한다.
         if error_count == 0:
+            check_cancelled(is_cancelled)
             deleted_paths = [
                 file["path"]
                 for file in missing_files

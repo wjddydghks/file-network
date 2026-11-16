@@ -6,6 +6,7 @@ import stat
 from app.extract_text import positive_integer
 from app.incremental_scan import run_incremental_scan
 from core.extractors.content import extract_content
+from core.operations import check_cancelled
 from core.extractors.text import DEFAULT_MAX_BYTES, TextExtractionResult
 from database import db, file_contents
 
@@ -27,16 +28,30 @@ def source_fingerprint(path, max_bytes):
     }, sort_keys=True)
 
 
-def run_content_analysis(root_path, max_bytes=DEFAULT_MAX_BYTES):
+def run_content_analysis(root_path, max_bytes=DEFAULT_MAX_BYTES, is_cancelled=None, progress_callback=None):
     if not isinstance(max_bytes, int) or max_bytes <= 0:
         raise ValueError("max_bytes는 양의 정수여야 합니다.")
 
     root = Path(root_path).expanduser().resolve()
-    run_incremental_scan(root)
+    scan_options = {}
+    if is_cancelled is not None:
+        scan_options["is_cancelled"] = is_cancelled
+    if progress_callback is not None:
+        scan_options["progress_callback"] = progress_callback
+    run_incremental_scan(root, **scan_options)
+    check_cancelled(is_cancelled)
     file_contents.initialize_file_contents()
     counts = {"extracted": 0, "skipped": 0, "failed": 0, "unchanged": 0}
 
-    for file in db.get_active_files_under(root):
+    files = db.get_active_files_under(root)
+
+    def report_progress():
+        if progress_callback is not None:
+            progress_callback({"phase": "analysis", "processed": sum(counts.values()), "total": len(files)})
+
+    report_progress()
+    for file in files:
+        check_cancelled(is_cancelled)
         path = Path(file["path"])
         fingerprint = None
         try:
@@ -48,6 +63,7 @@ def run_content_analysis(root_path, max_bytes=DEFAULT_MAX_BYTES):
                 and previous["source_fingerprint"] == fingerprint
             ):
                 counts["unchanged"] += 1
+                report_progress()
                 continue
 
             result = extract_content(path, max_bytes=max_bytes)
@@ -62,7 +78,9 @@ def run_content_analysis(root_path, max_bytes=DEFAULT_MAX_BYTES):
 
         file_contents.save_file_content(file["id"], result, fingerprint)
         counts[result.status.lower()] += 1
+        report_progress()
 
+    check_cancelled(is_cancelled)
     return counts
 
 
