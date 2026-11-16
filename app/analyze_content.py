@@ -5,11 +5,12 @@ import stat
 
 from app.extract_text import positive_integer
 from app.incremental_scan import run_incremental_scan
-from core.extractors.text import DEFAULT_MAX_BYTES, TextExtractionResult, extract_text
+from core.extractors.content import extract_content
+from core.extractors.text import DEFAULT_MAX_BYTES, TextExtractionResult
 from database import db, file_contents
 
 
-EXTRACTOR_VERSION = 1
+EXTRACTOR_VERSION = 2
 
 
 def source_fingerprint(path, max_bytes):
@@ -49,7 +50,7 @@ def run_content_analysis(root_path, max_bytes=DEFAULT_MAX_BYTES):
                 counts["unchanged"] += 1
                 continue
 
-            result = extract_text(path, max_bytes=max_bytes)
+            result = extract_content(path, max_bytes=max_bytes)
             if source_fingerprint(path, max_bytes) != fingerprint:
                 result = TextExtractionResult(
                     str(path), "FAILED", reason="FILE_CHANGED_DURING_ANALYSIS"

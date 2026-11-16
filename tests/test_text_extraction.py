@@ -120,7 +120,7 @@ def test_invalid_size_limit_is_rejected(tmp_path, limit):
     [
         (".txt", b"hello", "EXTRACTED", 0),
         (".py", "한글 😀".encode("utf-8"), "EXTRACTED", 0),
-        (".pdf", b"pdf", "SKIPPED", 0),
+        (".docx", b"docx", "SKIPPED", 0),
         (".txt", b"\xff", "FAILED", 1),
     ],
 )
