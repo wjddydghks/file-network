@@ -1,14 +1,10 @@
 """본문 추출 여부와 무관하게 저장된 파일명을 검색한다."""
 from os import sep
 from pathlib import Path
-import unicodedata
+from core.filenames import fold_filename
 
 from database import db
 from database.content_search import MAX_RESULTS
-
-
-def _fold(value):
-    return unicodedata.normalize("NFC", value).casefold()
 
 
 def search_filename(query, limit=20, root_path=None):
@@ -17,8 +13,8 @@ def search_filename(query, limit=20, root_path=None):
     if type(limit) is not int or not 1 <= limit <= MAX_RESULTS:
         raise ValueError(f"검색 결과 수는 1~{MAX_RESULTS} 사이의 정수여야 합니다.")
 
-    terms = [_fold(term) for term in query.split()]
-    conditions = ["instr(filename_fold(files.name), ?) > 0" for _ in terms]
+    terms = [fold_filename(term) for term in query.split()]
+    conditions = ["instr(files.name_fold, ?) > 0" for _ in terms]
     parameters = list(terms)
     if root_path is not None:
         root = str(Path(root_path).expanduser().resolve())
@@ -29,7 +25,6 @@ def search_filename(query, limit=20, root_path=None):
 
     db.initialize_database()
     with db.get_connection() as connection:
-        connection.create_function("filename_fold", 1, _fold, deterministic=True)
         rows = connection.execute(f"""
             SELECT files.id AS file_id, files.path, files.name,
                    files.name AS snippet, 0.0 AS score

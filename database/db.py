@@ -2,6 +2,7 @@ import sqlite3
 from os import sep
 from pathlib import Path
 from app.storage import default_database_path, is_frozen
+from core.filenames import fold_filename
 
 
 DB_PATH = default_database_path()
@@ -37,12 +38,14 @@ def get_connection():
         Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, factory=_ClosingConnection)
     conn.row_factory = _file_identity_row
+    conn.create_function('filename_fold', 1, fold_filename, deterministic=True)
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
 def initialize_database():
     with get_connection() as conn:
+        conn.execute('BEGIN')
         conn.execute("""
             CREATE TABLE IF NOT EXISTS files (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -56,7 +59,8 @@ def initialize_database():
                 scan_status TEXT NOT NULL DEFAULT 'DISCOVERED',
                 scanned_at TEXT NOT NULL,
                 device_id INTEGER,
-                inode INTEGER
+                inode INTEGER,
+                name_fold TEXT
             )
         """)
 
@@ -69,12 +73,38 @@ def initialize_database():
 
         migrations = {
             "device_id": "ALTER TABLE files ADD COLUMN device_id INTEGER",
-            "inode": "ALTER TABLE files ADD COLUMN inode INTEGER"
+            "inode": "ALTER TABLE files ADD COLUMN inode INTEGER",
+            "name_fold": "ALTER TABLE files ADD COLUMN name_fold TEXT",
         }
 
         for column, sql in migrations.items():
             if column not in columns:
                 conn.execute(sql)
+
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_files_unfolded ON files(id)
+            WHERE name_fold IS NULL
+        """)
+        conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS fold_inserted_filename
+            AFTER INSERT ON files BEGIN
+                UPDATE files SET name_fold = filename_fold(NEW.name) WHERE id = NEW.id;
+            END
+        """)
+        conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS fold_updated_filename
+            AFTER UPDATE OF name ON files WHEN OLD.name IS NOT NEW.name BEGIN
+                UPDATE files SET name_fold = filename_fold(NEW.name) WHERE id = NEW.id;
+            END
+        """)
+        # 기존 DB는 본문·파일 ID를 유지하고, 한 번에 읽는 이름 수만 제한한다.
+        # 부분 인덱스 덕분에 후속 초기화에서는 전체 파일을 다시 순회하지 않는다.
+        while True:
+            rows = conn.execute('SELECT id, name FROM files WHERE name_fold IS NULL LIMIT 500').fetchall()
+            if not rows:
+                break
+            conn.executemany('UPDATE files SET name_fold = ? WHERE id = ?',
+                             [(fold_filename(row['name']), row['id']) for row in rows])
 
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_files_name
