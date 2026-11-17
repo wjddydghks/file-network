@@ -6,6 +6,14 @@ from pathlib import Path
 DB_PATH = Path(__file__).resolve().parent / "file_network.db"
 
 
+class _ClosingConnection(sqlite3.Connection):
+    def __exit__(self, *args):
+        try:
+            return super().__exit__(*args)
+        finally:
+            self.close()
+
+
 def _store_file_identity(value):
     # 숫자 문자열은 INTEGER 열에서 REAL로 바뀔 수 있어 접두사로 정밀도를 보존한다.
     if isinstance(value, int) and not -(2**63) <= value < 2**63:
@@ -24,7 +32,7 @@ def _file_identity_row(cursor, row):
 
 
 def get_connection():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, factory=_ClosingConnection)
     conn.row_factory = _file_identity_row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
