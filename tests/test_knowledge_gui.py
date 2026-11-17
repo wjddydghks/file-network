@@ -183,3 +183,33 @@ def test_mouse_click_drills_down_without_deleting_active_event_item(application,
     wait_until(application,lambda:graph.focus=='I1')
     assert {n['id'] for n in graph.visible_nodes}=={'I1','C1','C2'}
     assert dialog.table.rowCount()==2
+
+
+def test_many_topics_use_multiple_columns_and_keep_text_readable(application):
+    from app.knowledge_graph_view import KnowledgeGraphView
+    from core.knowledge_graph import Document,KnowledgePlan,empty_state
+    docs=tuple(Document(f'F{i}',i,f'/local/{i}',str(i),'EXTRACTED','rev','주제 본문','') for i in range(12))
+    plan=KnowledgePlan('/local','','gpt-4.1-mini',docs);state=empty_state(plan)
+    state['interests']=[{'id':'I1','label':'사용자 및 알림 도구 개발','description':'사용자 기능 관련 주제'}]
+    state['topics']=[{'id':f'C{i+1}','parent':'I1','label':f'프로젝트 알림 처리 및 사용자 인터페이스 주제 {i+1}',
+                      'description':'세부 주제 설명','sources':[d.alias]} for i,d in enumerate(docs)]
+    state['assignments']={d.alias:[{'category':f'C{i+1}','reason':'분류 경로','quote':'주제 본문'}] for i,d in enumerate(docs)}
+    view=KnowledgeGraphView();view.resize(1000,760);view.show();application.processEvents()
+    try:
+        view.render_graph(plan,state)
+        view.selector.setCurrentIndex(view.selector.findData('I1'));application.processEvents()
+        cards=[item for item in view.scene.items() if isinstance(item.data(0),str) and item.data(0).startswith('C')]
+        assert len(cards)==12
+        assert len({round(card.pos().x()) for card in cards})==3
+        assert len({round(card.pos().y()) for card in cards})==4
+        assert view.canvas.transform().m11()>=0.9
+        assert all(item.font().pixelSize()*view.canvas.transform().m11()>=12.6 for item in view.text_items if item.font().bold())
+        view.selector.setCurrentIndex(view.selector.findData('C12'));application.processEvents()
+        last=next(card for card in cards if card.data(0)=='C12')
+        visible=view.canvas.mapToScene(view.canvas.viewport().rect()).boundingRect()
+        assert visible.contains(last.sceneBoundingRect())
+        view.zoom_in.click();assert view.canvas.transform().m11()>0.9
+        view.scale_label.click();assert view.canvas.transform().m11()==1.0
+        view.fit.click();assert view.canvas.transform().m11()>=0.9
+    finally:
+        view.close();view.deleteLater();application.processEvents()
