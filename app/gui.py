@@ -1,5 +1,6 @@
 """File Network의 로컬 분석·검색용 최소 데스크톱 화면."""
 import sys
+from collections import deque
 from pathlib import Path
 from threading import Event
 
@@ -30,6 +31,8 @@ from database.file_contents import MAX_PREVIEW_CHARS, get_content_preview, list_
 from database.document_chunks import find_matching_citation, get_document_chunk
 from database.related_documents import MAX_RELATED_RESULTS, find_related_documents
 from app.graph_view import RelatedGraphDialog
+
+MAX_GRAPH_HISTORY = 10
 
 MATCH_SOURCE_LABELS = {"content": "본문", "name": "파일명"}
 
@@ -254,6 +257,10 @@ class MainWindow(QMainWindow):
         self.content_dialog = None
         self.graph_dialog = None
         self._related_snapshot = None
+        self._related_scope = (None, 20)
+        self._pending_related_scope = (None, 20)
+        self._pending_graph_parent = None
+        self._graph_history = deque(maxlen=MAX_GRAPH_HISTORY)
         self.settings_path = Path(settings_path) if settings_path is not None else default_settings_path()
         self._saved_settings, settings_notice = load_settings(self.settings_path)
 
@@ -358,7 +365,7 @@ class MainWindow(QMainWindow):
         self.related_button.clicked.connect(self.start_related_documents)
         self.graph_button = QPushButton('관계 그래프')
         self.graph_button.setEnabled(False)
-        self.graph_button.clicked.connect(self.open_related_graph)
+        self.graph_button.clicked.connect(lambda: self.open_related_graph())
         open_row = QHBoxLayout()
         open_row.addWidget(self.selected_path, 1)
         open_row.addWidget(self.content_button)
@@ -532,6 +539,7 @@ class MainWindow(QMainWindow):
         self._outcome = ("cancelled", None)
         if kind not in ("preview", "citation", "related"):
             self._related_snapshot = None
+            self._graph_history.clear()
             self._results = []
             self.table.setRowCount(0)
             self.update_preview()
@@ -594,6 +602,8 @@ class MainWindow(QMainWindow):
         self.worker = None
         worker.deleteLater()
         outcome, result = self._outcome
+        graph_parent = self._pending_graph_parent if self._kind == 'related' else None
+        self._pending_graph_parent = None
         self.progress.setRange(0, 1)
         self.progress.setValue(1 if outcome == "completed" else 0)
         self._set_busy(False)
@@ -615,53 +625,64 @@ class MainWindow(QMainWindow):
                 self.content_dialog.show()
                 self.status.setText("검색어가 모두 포함된 첫 인용을 표시합니다. 이전·다음 구간은 검색 일치 여부와 무관한 일반 인용 탐색입니다." if self._kind == 'citation' else "마지막 분석 시점의 저장된 본문을 표시합니다.")
         else:
-            related = self._kind == 'related'
-            related_info = result if related else None
-            if related:
-                self._related_snapshot = related_info
-                result = related_info['results']
-            self._results = result
-            self._view_mode = self._kind
-            if self._kind == 'search':
-                self._results_query = self._pending_search_query
-            details = self._view_mode == "details"
-            unified = self._view_mode == 'search' and self._search_target == "all"
-            match_label = "일치 파일명" if self._search_target == "name" else "일치 본문"
-            if related:
-                headers = ["파일명", "공유 키워드", "경로", "일치 본문"]
-            elif details:
-                headers = ["파일명", "상태", "사유", "경로"]
-            elif unified:
-                headers = ["파일명", "일치 위치", "경로", "일치 내용"]
-            else:
-                headers = ["파일명", "경로", match_label]
-            self.table.setColumnCount(len(headers))
-            self.table.setHorizontalHeaderLabels(headers)
-            self.table.setRowCount(len(result))
-            for row_index, row in enumerate(result):
-                if related:
-                    values = (row['name'], ', '.join(row['shared_keywords']), row['path'], row['snippet'])
-                elif details:
-                    values = (row["name"], STATUS_LABELS.get(row["status"], row["status"]), reason_label(row), row["path"])
-                elif unified:
-                    values = (row["name"], MATCH_SOURCE_LABELS[row["match_source"]], row["path"], row["snippet"])
+            if self._kind == 'related':
+                if graph_parent is not None:
+                    self._graph_history.append(graph_parent)
                 else:
-                    values = (row["name"], row["path"], row["snippet"])
-                for column, value in enumerate(values):
-                    self.table.setItem(row_index, column, QTableWidgetItem(value or ""))
-            if related:
-                terms = ', '.join(item['term'] for item in related_info['keywords']) or '없음'
-                self.status.setText(f"기준: {related_info['source']['name']} — 관련 후보 {len(result):,}개 (최대 {MAX_RELATED_RESULTS}). 선정 키워드: {terms}. 공유 키워드 근거이며 실제 관계를 확정하지 않습니다.")
-            elif details:
-                self.status.setText(f"분석 내역 {len(result):,}개 — 최대 {self.limit.value():,}개 표시. 마지막으로 확인한 상태입니다.")
-            else:
-                self.status.setText(f"검색 결과 {len(result):,}개" if result else "검색 결과가 없습니다. 폴더와 검색어, 분석 여부를 확인하세요.")
-            if result:
-                self.table.selectRow(0)
-            self.update_preview()
-            self.graph_button.setEnabled(related)
+                    self._graph_history.clear()
+                self._related_scope = self._pending_related_scope
+            self._display_results(result, self._kind)
         if self._closing:
             self.close()
+        elif graph_parent is not None:
+            self.open_related_graph(notice=self.status.text() if outcome != 'completed' else '')
+
+    def _display_results(self, result, kind):
+        related = kind == 'related'
+        related_info = result if related else None
+        if related:
+            self._related_snapshot = related_info
+            result = related_info['results']
+        self._results = result
+        self._view_mode = kind
+        if kind == 'search':
+            self._results_query = self._pending_search_query
+        details = self._view_mode == "details"
+        unified = self._view_mode == 'search' and self._search_target == "all"
+        match_label = "일치 파일명" if self._search_target == "name" else "일치 본문"
+        if related:
+            headers = ["파일명", "공유 키워드", "경로", "일치 본문"]
+        elif details:
+            headers = ["파일명", "상태", "사유", "경로"]
+        elif unified:
+            headers = ["파일명", "일치 위치", "경로", "일치 내용"]
+        else:
+            headers = ["파일명", "경로", match_label]
+        self.table.setColumnCount(len(headers))
+        self.table.setHorizontalHeaderLabels(headers)
+        self.table.setRowCount(len(result))
+        for row_index, row in enumerate(result):
+            if related:
+                values = (row['name'], ', '.join(row['shared_keywords']), row['path'], row['snippet'])
+            elif details:
+                values = (row["name"], STATUS_LABELS.get(row["status"], row["status"]), reason_label(row), row["path"])
+            elif unified:
+                values = (row["name"], MATCH_SOURCE_LABELS[row["match_source"]], row["path"], row["snippet"])
+            else:
+                values = (row["name"], row["path"], row["snippet"])
+            for column, value in enumerate(values):
+                self.table.setItem(row_index, column, QTableWidgetItem(value or ""))
+        if related:
+            terms = ', '.join(item['term'] for item in related_info['keywords']) or '없음'
+            self.status.setText(f"기준: {related_info['source']['name']} — 관련 후보 {len(result):,}개 (최대 {MAX_RELATED_RESULTS}). 선정 키워드: {terms}. 공유 키워드 근거이며 실제 관계를 확정하지 않습니다.")
+        elif details:
+            self.status.setText(f"분석 내역 {len(result):,}개 — 최대 {self.limit.value():,}개 표시. 마지막으로 확인한 상태입니다.")
+        else:
+            self.status.setText(f"검색 결과 {len(result):,}개" if result else "검색 결과가 없습니다. 폴더와 검색어, 분석 여부를 확인하세요.")
+        if result:
+            self.table.selectRow(0)
+        self.update_preview()
+        self.graph_button.setEnabled(related)
 
     @Slot()
     def update_preview(self):
@@ -715,19 +736,45 @@ class MainWindow(QMainWindow):
             return
         file_id = self._results[index]['file_id']
         limit = min(self.limit.value(), MAX_RELATED_RESULTS)
+        self._queue_related(file_id, root, limit)
+
+    def _queue_related(self, file_id, root, limit, graph_parent=None):
+        self._pending_related_scope = (root, limit)
+        self._pending_graph_parent = graph_parent
         self._start_task('related', lambda cancelled, progress: find_related_documents(file_id, limit=limit, root_path=root, is_cancelled=cancelled))
 
     @Slot()
-    def open_related_graph(self):
+    def open_related_graph(self, *, notice=''):
         if self.worker is not None or self._view_mode != 'related' or self._related_snapshot is None:
             return
         if self.graph_dialog is not None:
             self.graph_dialog.raise_()
             return
-        self.graph_dialog = RelatedGraphDialog(self._related_snapshot, self)
+        scope = self._related_scope[0] or '전체 분석 폴더'
+        self.graph_dialog = RelatedGraphDialog(self._related_snapshot, self, can_go_back=bool(self._graph_history), scope_label=scope, notice=notice)
         self.graph_dialog.fileActivated.connect(self._open_graph_content)
+        self.graph_dialog.recenterRequested.connect(self._recenter_graph)
+        self.graph_dialog.backRequested.connect(self._go_back_graph)
         self.graph_dialog.finished.connect(self._clear_graph_dialog)
         self.graph_dialog.show()
+
+    @Slot(object)
+    def _recenter_graph(self, file_id):
+        if self.worker is not None or self._closing or self._related_snapshot is None:
+            return
+        if file_id == self._related_snapshot['source']['file_id']:
+            return
+        root, limit = self._related_scope
+        self._queue_related(file_id, root, limit, graph_parent=(self._related_snapshot, self._related_scope))
+
+    @Slot()
+    def _go_back_graph(self):
+        if self.worker is not None or self._closing or not self._graph_history:
+            return
+        snapshot, scope = self._graph_history.pop()
+        self._related_scope = scope
+        self._display_results(snapshot, 'related')
+        self.open_related_graph()
 
     @Slot()
     def _clear_graph_dialog(self):
