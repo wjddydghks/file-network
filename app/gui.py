@@ -23,6 +23,7 @@ from app.analyze_content import run_content_analysis
 from app.analysis_details import STATUS_LABELS, format_analysis_detail, reason_label
 from app.gui_settings import GuiSettings, load_settings, save_settings
 from core.operations import check_cancelled
+from core.search_queries import parse_query_terms
 from core.scanner.exclusions import parse_excluded_dirs
 from database.content_search import search_content
 from database.file_search import search_filename
@@ -511,6 +512,7 @@ class MainWindow(QMainWindow):
             self.status.setText("검색어를 입력하세요.")
             return
         try:
+            parse_query_terms(query)
             root = None if self.all_folders.isChecked() else self._root()
         except (ValueError, OSError, RuntimeError) as error:
             self.status.setText(str(error))

@@ -1,11 +1,11 @@
 """본문 일치를 우선하고 파일명 일치를 보충하는 로컬 통합 검색."""
 from database.content_search import MAX_RESULTS, search_content
 from database.file_search import search_filename
+from core.search_queries import parse_query_terms
 
 
 def search_all(query, limit=20, root_path=None):
-    if not isinstance(query, str) or not query.strip():
-        raise ValueError("검색어를 입력하세요.")
+    parse_query_terms(query)
     if type(limit) is not int or not 1 <= limit <= MAX_RESULTS:
         raise ValueError(f"검색 결과 수는 1~{MAX_RESULTS} 사이의 정수여야 합니다.")
 

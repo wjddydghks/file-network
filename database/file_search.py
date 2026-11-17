@@ -2,18 +2,18 @@
 from os import sep
 from pathlib import Path
 from core.filenames import fold_filename
+from core.search_queries import parse_query_terms
 
 from database import db
 from database.content_search import MAX_RESULTS
 
 
 def search_filename(query, limit=20, root_path=None):
-    if not isinstance(query, str) or not query.strip():
-        raise ValueError("검색어를 입력하세요.")
+    query_terms = parse_query_terms(query)
     if type(limit) is not int or not 1 <= limit <= MAX_RESULTS:
         raise ValueError(f"검색 결과 수는 1~{MAX_RESULTS} 사이의 정수여야 합니다.")
 
-    terms = [fold_filename(term) for term in query.split()]
+    terms = [fold_filename(term) for term in query_terms]
     conditions = ["instr(files.name_fold, ?) > 0" for _ in terms]
     parameters = list(terms)
     if root_path is not None:

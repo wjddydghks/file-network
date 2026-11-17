@@ -3,15 +3,14 @@ from pathlib import Path
 import sqlite3
 
 from database import db, file_contents
+from core.search_queries import parse_query_terms
 
 
 MAX_RESULTS = 1000
 
 
 def literal_match_query(query):
-    if not isinstance(query, str) or not query.strip():
-        raise ValueError("검색어를 입력하세요.")
-    return " AND ".join('"' + term.replace('"', '""') + '"' for term in query.split())
+    return " AND ".join('"' + term.replace('"', '""') + '"' for term in parse_query_terms(query))
 
 
 def initialize_content_search():
@@ -66,7 +65,7 @@ def initialize_content_search():
 
 def search_content(query, limit=20, root_path=None):
     match_query = literal_match_query(query)
-    if not isinstance(limit, int) or not 1 <= limit <= MAX_RESULTS:
+    if type(limit) is not int or not 1 <= limit <= MAX_RESULTS:
         raise ValueError(f"검색 결과 수는 1~{MAX_RESULTS} 사이의 정수여야 합니다.")
 
     # 사용자 입력을 FTS 문법이 아닌 리터럴 단어/구로 검색한다.
