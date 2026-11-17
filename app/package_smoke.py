@@ -86,7 +86,7 @@ def run_smoke():
                 wait_for(lambda: view.worker is None)
                 if len(view._results) != 1:
                     raise RuntimeError('패키지 PDF 검색 실패')
-                view.start_content_preview()
+                view.citation_button.click()
                 wait_for(lambda: view.worker is None)
                 dialog = view.content_dialog
                 if dialog is None:
@@ -142,6 +142,6 @@ def run_smoke():
     return {
         'success': True, 'frozen': frozen, 'platform': platform.platform(),
         'database_outside_bundle': outside_bundle, 'gui_platform': app.platformName(),
-        'gui': {'analysis': True, 'search': True, 'preview': True, 'citations': True, 'office_citations': True, 'exclusions': True, 'settings_restore': True, 'writable_data_directory': True},
+        'gui': {'analysis': True, 'search': True, 'preview': True, 'citations': True, 'office_citations': True, 'matching_citation': True, 'exclusions': True, 'settings_restore': True, 'writable_data_directory': True},
         'benchmark': benchmark,
     }

@@ -27,7 +27,7 @@ from database.content_search import search_content
 from database.file_search import search_filename
 from database.unified_search import search_all
 from database.file_contents import MAX_PREVIEW_CHARS, get_content_preview, list_analysis_results
-from database.document_chunks import get_document_chunk
+from database.document_chunks import find_matching_citation, get_document_chunk
 
 MATCH_SOURCE_LABELS = {"content": "본문", "name": "파일명"}
 
@@ -59,6 +59,7 @@ class ContentPreviewDialog(QDialog):
         self.mode = QComboBox()
         self.mode.addItem("전체 본문 구간", "text")
         self.mode.addItem("인용 단위 · 원본 위치", "chunks")
+        self.mode.setCurrentIndex(1 if result.get('chunk_mode') else 0)
         self.mode.currentIndexChanged.connect(lambda: self.load_segment(0))
         self.previous = QPushButton("이전 구간")
         self.previous.clicked.connect(lambda: self.load_segment(self._result['segment'] - 1))
@@ -242,6 +243,8 @@ class MainWindow(QMainWindow):
         self.worker = None
         self._closing = False
         self._results = []
+        self._results_query = ''
+        self._pending_search_query = ''
         self._kind = None
         self._outcome = None
         self._view_mode = "search"
@@ -341,9 +344,14 @@ class MainWindow(QMainWindow):
         self.content_button = QPushButton("저장된 본문 보기")
         self.content_button.setEnabled(False)
         self.content_button.clicked.connect(self.start_content_preview)
+        self.citation_button = QPushButton("일치 인용 보기")
+        self.citation_button.setEnabled(False)
+        self.citation_button.setToolTip("완료한 본문 검색의 모든 검색어가 포함된 첫 인용을 엽니다. 검색어가 여러 인용에 나뉘면 일치 인용이 없을 수 있습니다.")
+        self.citation_button.clicked.connect(self.start_matching_citation)
         open_row = QHBoxLayout()
         open_row.addWidget(self.selected_path, 1)
         open_row.addWidget(self.content_button)
+        open_row.addWidget(self.citation_button)
         open_row.addWidget(self.open_button)
         self.progress = QProgressBar()
         self.progress.setRange(0, 1)
@@ -489,6 +497,7 @@ class MainWindow(QMainWindow):
             return
         limit = self.limit.value()
         self._search_target = self.search_target.currentData()
+        self._pending_search_query = query
         search = {"content": search_content, "name": search_filename, "all": search_all}[self._search_target]
         self._start_task("search", lambda cancelled, progress: search(query, limit=limit, root_path=root))
 
@@ -508,12 +517,12 @@ class MainWindow(QMainWindow):
     def _start_task(self, kind, operation):
         self._kind = kind
         self._outcome = ("cancelled", None)
-        if kind != "preview":
+        if kind not in ("preview", "citation"):
             self._results = []
             self.table.setRowCount(0)
             self.update_preview()
         self._set_busy(True)
-        self.status.setText({"analysis": "스캔·분석 중…", "search": "검색 중…", "details": "분석 내역 조회 중…", "preview": "저장된 본문 조회 중…"}[kind])
+        self.status.setText({"analysis": "스캔·분석 중…", "search": "검색 중…", "details": "분석 내역 조회 중…", "preview": "저장된 본문 조회 중…", "citation": "일치 인용 조회 중…"}[kind])
         self.progress.setRange(0, 0)
         self.worker = TaskThread(operation, self)
         self.worker.completed.connect(self._completed)
@@ -528,6 +537,7 @@ class MainWindow(QMainWindow):
             widget.setEnabled(not busy)
         self.open_button.setEnabled(not busy and self.table.currentRow() >= 0)
         self.content_button.setEnabled(not busy and self.table.currentRow() >= 0)
+        self.citation_button.setEnabled(not busy and self._can_open_citation())
         self.cancel.setEnabled(busy)
 
     @Slot()
@@ -580,17 +590,19 @@ class MainWindow(QMainWindow):
                 f"분석 완료 — 추출 {result['extracted']:,}, 기존 결과 재사용 {result['unchanged']:,}, "
                 f"건너뜀 {result['skipped']:,}, 실패 {result['failed']:,}개. 분석 내역에서 파일별 사유를 확인하세요."
             )
-        elif self._kind == "preview":
+        elif self._kind in ("preview", "citation"):
             if result is None:
-                self.status.setText("저장된 파일을 찾을 수 없습니다. 검색 또는 분석 내역을 새로 조회하세요.")
+                self.status.setText("모든 검색어를 포함하는 인용이 없습니다. 검색어가 구간에 나뉘었거나 인용이 없을 수 있습니다. 저장된 본문 보기 또는 재분석으로 확인하세요." if self._kind == 'citation' else "저장된 파일을 찾을 수 없습니다. 검색 또는 분석 내역을 새로 조회하세요.")
             elif not self._closing:
                 self.content_dialog = ContentPreviewDialog(result, self)
                 self.content_dialog.finished.connect(self._clear_content_dialog)
                 self.content_dialog.show()
-                self.status.setText("마지막 분석 시점의 저장된 본문을 표시합니다.")
+                self.status.setText("검색어가 모두 포함된 첫 인용을 표시합니다. 이전·다음 구간은 검색 일치 여부와 무관한 일반 인용 탐색입니다." if self._kind == 'citation' else "마지막 분석 시점의 저장된 본문을 표시합니다.")
         else:
             self._results = result
             self._view_mode = self._kind
+            if self._kind == 'search':
+                self._results_query = self._pending_search_query
             details = self._view_mode == "details"
             unified = not details and self._search_target == "all"
             match_label = "일치 파일명" if self._search_target == "name" else "일치 본문"
@@ -633,11 +645,27 @@ class MainWindow(QMainWindow):
             self.selected_path.setText(result["path"])
             self.open_button.setEnabled(self.worker is None)
             self.content_button.setEnabled(self.worker is None)
+            self.citation_button.setEnabled(self.worker is None and self._can_open_citation())
         else:
             self.preview.clear()
             self.selected_path.setText("선택된 파일 없음")
             self.open_button.setEnabled(False)
             self.content_button.setEnabled(False)
+            self.citation_button.setEnabled(False)
+
+    def _can_open_citation(self):
+        index = self.table.currentRow()
+        return (0 <= index < len(self._results) and self._view_mode == 'search'
+                and self._search_target != 'name' and bool(self._results_query)
+                and self._results[index].get('match_source') != 'name')
+
+    @Slot()
+    def start_matching_citation(self):
+        if self.worker is not None or not self._can_open_citation():
+            return
+        file_id = self._results[self.table.currentRow()]['file_id']
+        query = self._results_query
+        self._start_task('citation', lambda cancelled, progress: find_matching_citation(file_id, query, is_cancelled=cancelled))
 
     @Slot()
     def _clear_content_dialog(self):

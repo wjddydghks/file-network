@@ -980,3 +980,93 @@ def test_gui_office_citation_original_locations_plain_text(application, window, 
     assert 'officecitationkeyword' in dialog.body.toPlainText() and 'last body' in dialog.body.toPlainText()
     dialog.close()
     application.processEvents()
+
+
+def test_gui_matching_citation_uses_completed_search_and_actual_page(application, window):
+    from tests.test_pdf_extraction import make_pdf
+    view, root = window
+    make_pdf(root / 'note.pdf', ('first unrelated', '', 'needlekeyword here'))
+    run_content_analysis(root)
+    view.query.setText('needlekeyword')
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    assert view.citation_button.isEnabled()
+    view.query.setText('unsubmitted edit')
+    before = list(view._results)
+    QTest.mouseClick(view.citation_button, Qt.MouseButton.LeftButton)
+    assert not view.citation_button.isEnabled()
+    wait_until(application, lambda: view.worker is None)
+    dialog = view.content_dialog
+    assert dialog is not None and dialog.mode.currentData() == 'chunks'
+    assert 'PDF 3페이지' in dialog.summary.text()
+    assert 'needlekeyword' in dialog.body.toPlainText()
+    assert view._results == before and view.table.currentRow() == 0
+    dialog.close()
+    application.processEvents()
+    view.search_target.setCurrentIndex(view.search_target.findData('name'))
+    view.query.setText('note')
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    assert not view.citation_button.isEnabled()
+    view.start_details()
+    wait_until(application, lambda: view.worker is None)
+    assert not view.citation_button.isEnabled()
+
+
+def test_gui_no_matching_citation_preserves_results_and_full_body(application, window):
+    view, root = window
+    text = 'alpha ' + 'x ' * 1100 + 'beta'
+    (root / 'note.txt').write_text(text, encoding='utf-8')
+    run_content_analysis(root)
+    view.query.setText('alpha beta')
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    before = list(view._results)
+    view.start_matching_citation()
+    wait_until(application, lambda: view.worker is None)
+    assert view.content_dialog is None
+    assert '모든 검색어를 포함하는 인용이 없습니다' in view.status.text()
+    assert view._results == before and view.content_button.isEnabled()
+    view.start_content_preview()
+    wait_until(application, lambda: view.worker is None)
+    assert view.content_dialog.body.toPlainText() == text
+    view.content_dialog.close()
+    application.processEvents()
+
+
+def test_gui_unified_name_only_result_disables_matching_citation(application, window):
+    view, root = window
+    (root / 'needlekeyword.png').write_bytes(b'\xff')
+    view.start_analysis()
+    wait_until(application, lambda: view.worker is None)
+    view.search_target.setCurrentIndex(view.search_target.findData('all'))
+    view.query.setText('needlekeyword')
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    assert view._results[0]['match_source'] == 'name'
+    assert not view.citation_button.isEnabled()
+    assert view.content_button.isEnabled()
+
+
+def test_gui_matching_citation_cancel_keeps_results(application, window, monkeypatch):
+    view, root = window
+    (root / 'note.txt').write_text('needle', encoding='utf-8')
+    run_content_analysis(root)
+    view.query.setText('needle')
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    before = list(view._results)
+    started = Event()
+    def waiting(file_id, query, is_cancelled):
+        started.set()
+        while not is_cancelled():
+            time.sleep(0.005)
+        check_cancelled(is_cancelled)
+    monkeypatch.setattr(gui, 'find_matching_citation', waiting)
+    view.start_matching_citation()
+    wait_until(application, started.is_set)
+    view.cancel_task()
+    wait_until(application, lambda: view.worker is None)
+    assert view._outcome[0] == 'cancelled'
+    assert view._results == before and view.table.currentRow() == 0
+    assert view.citation_button.isEnabled() and view.content_button.isEnabled()

@@ -8,6 +8,12 @@ from database import db, file_contents
 MAX_RESULTS = 1000
 
 
+def literal_match_query(query):
+    if not isinstance(query, str) or not query.strip():
+        raise ValueError("검색어를 입력하세요.")
+    return " AND ".join('"' + term.replace('"', '""') + '"' for term in query.split())
+
+
 def initialize_content_search():
     db.initialize_database()
     file_contents.initialize_file_contents()
@@ -59,13 +65,11 @@ def initialize_content_search():
 
 
 def search_content(query, limit=20, root_path=None):
-    if not isinstance(query, str) or not query.strip():
-        raise ValueError("검색어를 입력하세요.")
+    match_query = literal_match_query(query)
     if not isinstance(limit, int) or not 1 <= limit <= MAX_RESULTS:
         raise ValueError(f"검색 결과 수는 1~{MAX_RESULTS} 사이의 정수여야 합니다.")
 
     # 사용자 입력을 FTS 문법이 아닌 리터럴 단어/구로 검색한다.
-    match_query = " AND ".join('"' + term.replace('"', '""') + '"' for term in query.split())
     initialize_content_search()
     scope_sql = ""
     parameters = [match_query]
