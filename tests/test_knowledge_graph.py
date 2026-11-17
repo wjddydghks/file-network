@@ -272,7 +272,7 @@ def test_excluded_previously_indexed_folder_never_transmitted(area,monkeypatch):
     assert excluded.file_id in next(n for n in graph_nodes(plan,prepare_knowledge(area,excluded_dirs=['private']).state()) if n['id']=='status:blocked')['files']
 
 
-@pytest.mark.parametrize('bad',['missing','duplicate','fake_quote','sensitive_summary','generic_keyword'])
+@pytest.mark.parametrize('bad',['missing','duplicate','fake_quote','sensitive_summary','invalid_keyword'])
 def test_invalid_document_summary_never_creates_taxonomy(area,monkeypatch,bad):
     provider=Provider()
     def request(payload,key):
@@ -283,7 +283,7 @@ def test_invalid_document_summary_never_creates_taxonomy(area,monkeypatch,bad):
         elif bad=='duplicate':rows[1]['file']=rows[0]['file']
         elif bad=='fake_quote':rows[0]['quote']='본문에 없는 인용'
         elif bad=='sensitive_summary':rows[0]['summary']='연락 user@example.com'
-        else:rows[0]['keywords']=[]
+        else:rows[0]['keywords']=[17]
         return response(data)
     monkeypatch.setattr(transport,'_request',request)
     with pytest.raises(ValueError):execute(prepare_knowledge(area))
@@ -452,3 +452,37 @@ def test_live_requests_choose_evidence_ids_and_saved_quotes_still_resume(area,mo
             assert all(item['text'] in file['sample'] for item in file['evidence'])
         schema=json.dumps(request['response_format'])
         assert 'evidence_id' in schema and '"quote"' not in schema
+
+
+@pytest.mark.parametrize('words,expected', [
+    ([], []),
+    (['', '  ', '\t'], []),
+    ([' 일정 ', '일정', '예산', '예산'], ['일정','예산']),
+    (['Research', 'research', 'A  B'], ['Research','A B']),
+    ([f'주제{i}' for i in range(10)], [f'주제{i}' for i in range(5)]),
+    (['가'*70], ['가'*40]),
+])
+def test_optional_keyword_variations_do_not_abort_paid_batch(area,monkeypatch,words,expected):
+    provider=Provider()
+    def request(payload,key):
+        reply=provider(payload,key)
+        if payload['response_format']['json_schema']['name']=='knowledge_summaries':
+            data=json.loads(reply['choices'][0]['message']['content'])
+            for row in data['summaries']:row['keywords']=words
+            return response(data)
+        return reply
+    monkeypatch.setattr(transport,'_request',request)
+    plan=prepare_knowledge(area)
+    state=execute(plan)
+    assert state['complete'] and len(provider.calls)==3
+    assert all(s['keywords']==expected for s in state['summaries'].values())
+    assert prepare_knowledge(area).calls==0
+
+
+@pytest.mark.parametrize('words', [
+    ['주제1','주제2','주제3','주제4','주제5','user@example.com'],
+    ['가'*50+' user@example.com'],
+])
+def test_keyword_cleanup_does_not_hide_sensitive_discarded_text(words):
+    from core.knowledge_graph import normalize_keywords
+    with pytest.raises(ValueError,match='민감정보'):normalize_keywords(words)
