@@ -2,6 +2,7 @@ import argparse
 import json
 from pathlib import Path
 import stat
+from app.console import configure_console
 
 from app.extract_text import positive_integer
 from app.incremental_scan import run_incremental_scan
@@ -10,6 +11,7 @@ from core.operations import check_cancelled
 from core.extractors.text import DEFAULT_MAX_BYTES, TEXT_ENCODINGS, TextExtractionResult, validate_text_encoding
 from core.scanner.scanner import classify_file
 from database import db, file_contents
+from core.scanner.exclusions import ExcludedDirectories, validate_excluded_dirs
 
 
 EXTRACTOR_VERSION = 5
@@ -30,13 +32,17 @@ def source_fingerprint(path, max_bytes, text_encoding="auto"):
     }, sort_keys=True)
 
 
-def run_content_analysis(root_path, max_bytes=DEFAULT_MAX_BYTES, is_cancelled=None, progress_callback=None, text_encoding="auto"):
+def run_content_analysis(root_path, max_bytes=DEFAULT_MAX_BYTES, is_cancelled=None, progress_callback=None, text_encoding="auto", excluded_dirs=()):
+    excluded_dirs = validate_excluded_dirs(excluded_dirs)
     validate_text_encoding(text_encoding)
     if not isinstance(max_bytes, int) or max_bytes <= 0:
         raise ValueError("max_bytes는 양의 정수여야 합니다.")
 
     root = Path(root_path).expanduser().resolve()
+    exclusions = ExcludedDirectories(root, excluded_dirs)
     scan_options = {}
+    if excluded_dirs:
+        scan_options['excluded_dirs'] = excluded_dirs
     if is_cancelled is not None:
         scan_options["is_cancelled"] = is_cancelled
     if progress_callback is not None:
@@ -47,6 +53,8 @@ def run_content_analysis(root_path, max_bytes=DEFAULT_MAX_BYTES, is_cancelled=No
     counts = {"extracted": 0, "skipped": 0, "failed": 0, "unchanged": 0}
 
     files = db.get_active_files_under(root)
+    if excluded_dirs:
+        files = [file for file in files if not exclusions.contains_file(file['path'])]
 
     def report_progress():
         if progress_callback is not None:
@@ -95,14 +103,16 @@ def run_content_analysis(root_path, max_bytes=DEFAULT_MAX_BYTES, is_cancelled=No
 
 
 def main():
+    configure_console()
     parser = argparse.ArgumentParser(description="File Network - Batch Content Analyzer")
     parser.add_argument("path", help="스캔하고 내용을 분석할 디렉터리")
     parser.add_argument("--max-bytes", type=positive_integer, default=DEFAULT_MAX_BYTES)
     parser.add_argument("--encoding", choices=TEXT_ENCODINGS, default="auto", help="텍스트/코드 인코딩: auto(BOM 또는 UTF-8), utf-8, cp949. 폴더의 텍스트 전체에 적용")
+    parser.add_argument('--exclude-dir', action='append', default=[], help='모든 깊이에서 제외할 폴더명 (반복 가능)')
     args = parser.parse_args()
     try:
-        counts = run_content_analysis(args.path, max_bytes=args.max_bytes, text_encoding=args.encoding)
-    except (FileNotFoundError, NotADirectoryError) as error:
+        counts = run_content_analysis(args.path, max_bytes=args.max_bytes, text_encoding=args.encoding, excluded_dirs=args.exclude_dir)
+    except (FileNotFoundError, NotADirectoryError, ValueError) as error:
         parser.error(str(error))
     except KeyboardInterrupt:
         print("\n작업이 취소되었습니다. 이미 저장된 결과는 유지됩니다.")

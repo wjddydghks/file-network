@@ -22,6 +22,7 @@ from app.analyze_content import run_content_analysis
 from app.analysis_details import STATUS_LABELS, format_analysis_detail, reason_label
 from app.gui_settings import GuiSettings, load_settings, save_settings
 from core.operations import check_cancelled
+from core.scanner.exclusions import parse_excluded_dirs
 from database.content_search import search_content
 from database.file_search import search_filename
 from database.unified_search import search_all
@@ -266,6 +267,13 @@ class MainWindow(QMainWindow):
         folder_row = QHBoxLayout()
         for widget in (self.folder, self.browse, QLabel("파일 크기 제한"), self.max_size, self.text_encoding, self.analyze, self.cancel):
             folder_row.addWidget(widget)
+        self.excluded_dirs = QLineEdit()
+        self.excluded_dirs.setMaxLength(26000)
+        self.excluded_dirs.setPlaceholderText("예: .git, node_modules, .venv (비워 두면 제외 없음)")
+        self.excluded_dirs.setToolTip("쉼표로 구분한 폴더명 전체를 모든 깊이에서 제외합니다. 선택한 루트 자체는 제외하지 않습니다. 기존 DB·검색 결과는 유지되며 삭제하지 않습니다.")
+        exclusions_row = QHBoxLayout()
+        exclusions_row.addWidget(QLabel("분석 제외 폴더"))
+        exclusions_row.addWidget(self.excluded_dirs)
 
         self.query = QLineEdit()
         self.query.setPlaceholderText("본문 검색어 — 여러 단어는 모두 포함하는 문서 검색")
@@ -344,6 +352,7 @@ class MainWindow(QMainWindow):
 
         layout = QVBoxLayout()
         layout.addLayout(folder_row)
+        layout.addLayout(exclusions_row)
         layout.addLayout(search_row)
         layout.addLayout(details_row)
         layout.addWidget(splitter, 1)
@@ -361,6 +370,7 @@ class MainWindow(QMainWindow):
         self._settings_timer.setInterval(300)
         self._settings_timer.timeout.connect(self._save_settings)
         self.folder.editingFinished.connect(self._schedule_settings)
+        self.excluded_dirs.editingFinished.connect(self._schedule_settings)
         self.browse.clicked.connect(self._schedule_settings)
         for combo in (self.text_encoding, self.search_target, self.analysis_filter):
             combo.currentIndexChanged.connect(self._schedule_settings)
@@ -374,6 +384,7 @@ class MainWindow(QMainWindow):
 
     def _apply_settings(self, settings):
         self.folder.setText(settings.folder)
+        self.excluded_dirs.setText(settings.excluded_dirs)
         self.max_size.setValue(settings.max_size_mib)
         self.text_encoding.setCurrentIndex(self.text_encoding.findData(settings.text_encoding))
         self.search_target.setCurrentIndex(self.search_target.findData(settings.search_target))
@@ -387,6 +398,7 @@ class MainWindow(QMainWindow):
             text_encoding=self.text_encoding.currentData(), search_target=self.search_target.currentData(),
             all_folders=self.all_folders.isChecked(), result_limit=self.limit.value(),
             analysis_filter=self.analysis_filter.currentData(),
+            excluded_dirs=self.excluded_dirs.text(),
         )
 
     @Slot()
@@ -435,14 +447,17 @@ class MainWindow(QMainWindow):
             return
         try:
             root = self._root()
+            excluded_dirs = parse_excluded_dirs(self.excluded_dirs.text())
         except (ValueError, OSError, RuntimeError) as error:
             self.status.setText(str(error))
             return
         max_bytes = self.max_size.value() * 1024 * 1024
         text_encoding = self.text_encoding.currentData()
+        options = {'excluded_dirs': excluded_dirs} if excluded_dirs else {}
         self._start_task("analysis", lambda cancelled, progress: run_content_analysis(
             root, max_bytes=max_bytes, is_cancelled=cancelled, progress_callback=progress,
             text_encoding=text_encoding,
+            **options,
         ))
 
     @Slot()
@@ -504,7 +519,7 @@ class MainWindow(QMainWindow):
         self.worker.start()
 
     def _set_busy(self, busy):
-        for widget in (self.folder, self.browse, self.max_size, self.text_encoding, self.analyze, self.query, self.search_target, self.all_folders, self.limit, self.search, self.table, self.analysis_filter, self.details_button, self.reset_settings_button):
+        for widget in (self.folder, self.excluded_dirs, self.browse, self.max_size, self.text_encoding, self.analyze, self.query, self.search_target, self.all_folders, self.limit, self.search, self.table, self.analysis_filter, self.details_button, self.reset_settings_button):
             widget.setEnabled(not busy)
         self.open_button.setEnabled(not busy and self.table.currentRow() >= 0)
         self.content_button.setEnabled(not busy and self.table.currentRow() >= 0)

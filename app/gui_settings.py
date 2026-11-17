@@ -7,6 +7,7 @@ from tempfile import NamedTemporaryFile
 
 from core.extractors.text import TEXT_ENCODINGS
 from database.file_contents import ANALYSIS_STATUSES
+from core.scanner.exclusions import parse_excluded_dirs
 
 
 MAX_SETTINGS_BYTES = 64 * 1024
@@ -22,6 +23,15 @@ class GuiSettings:
     all_folders: bool = False
     result_limit: int = 100
     analysis_filter: str | None = None
+    excluded_dirs: str = ''
+
+
+def _valid_exclusions(value):
+    try:
+        parse_excluded_dirs(value)
+        return True
+    except ValueError:
+        return False
 
 
 def _valid_folder(value):
@@ -42,6 +52,7 @@ def _parse_settings(data):
     defaults = asdict(GuiSettings())
     validators = {
         'folder': _valid_folder,
+        'excluded_dirs': _valid_exclusions,
         'max_size_mib': lambda v: type(v) is int and 1 <= v <= 100,
         'text_encoding': lambda v: isinstance(v, str) and v in TEXT_ENCODINGS,
         'search_target': lambda v: isinstance(v, str) and v in ('content', 'name', 'all'),

@@ -926,3 +926,29 @@ def test_gui_citation_legacy_data_requires_reanalysis(application, window):
     assert dialog.body.toPlainText() == 'citationkeyword old'
     dialog.close()
     application.processEvents()
+
+
+def test_gui_excluded_folders_analysis_validation_and_reset(application, window):
+    view, root = window
+    (root / 'skip').mkdir()
+    (root / 'skip' / 'hidden.txt').write_text('hiddenkeyword', encoding='utf-8')
+    (root / 'kept.txt').write_text('keptkeyword', encoding='utf-8')
+    view.excluded_dirs.setText('../invalid')
+    view.start_analysis()
+    assert view.worker is None
+    assert '폴더명' in view.status.text()
+    assert not db.DB_PATH.exists()
+    view.excluded_dirs.setText(' skip, node_modules ')
+    view.start_analysis()
+    assert not view.excluded_dirs.isEnabled()
+    wait_until(application, lambda: view.worker is None)
+    assert view._outcome[0] == 'completed'
+    assert view._outcome[1]['extracted'] == 1
+    assert [row['name'] for row in db.get_active_files_under(root)] == ['kept.txt']
+    view._save_settings(force=True)
+    restored = gui.MainWindow(settings_path=view.settings_path)
+    assert restored.excluded_dirs.text() == ' skip, node_modules '
+    restored.close()
+    restored.deleteLater()
+    view.reset_settings()
+    assert view.excluded_dirs.text() == ''
