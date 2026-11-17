@@ -1142,3 +1142,80 @@ def test_gui_related_cancellation_preserves_original_results(application, window
     wait_until(application, lambda: view.worker is None)
     assert view._outcome[0] == 'cancelled' and view._results == before
     assert view.related_button.isEnabled() and view.content_button.isEnabled()
+
+
+def test_gui_graph_opens_candidate_and_source_snapshots(application, window):
+    view, root = window
+    (root / 'source.txt').write_text('galaxy telescope astronomy', encoding='utf-8')
+    (root / 'other.txt').write_text('galaxy telescope science', encoding='utf-8')
+    run_content_analysis(root)
+    view.query.setText('astronomy')
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    assert not view.graph_button.isEnabled()
+    view.start_related_documents()
+    wait_until(application, lambda: view.worker is None)
+    before = list(view._results)
+    assert view.graph_button.isEnabled()
+    view.graph_button.click()
+    graph = view.graph_dialog
+    assert graph is not None and len(graph.nodes) == 2
+    view.open_related_graph()
+    assert view.graph_dialog is graph
+    graph.selector.setCurrentIndex(1)
+    graph.open_body.click()
+    wait_until(application, lambda: view.worker is None)
+    assert view.graph_dialog is None
+    assert view.content_dialog.body.toPlainText() == 'galaxy telescope science'
+    assert view._results == before
+    view.content_dialog.close()
+    application.processEvents()
+    view.open_related_graph()
+    view.graph_dialog.open_body.click()  # Root is not in the candidate table.
+    wait_until(application, lambda: view.worker is None)
+    assert view.content_dialog.body.toPlainText() == 'galaxy telescope astronomy'
+    view.content_dialog.close()
+    application.processEvents()
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    assert not view.graph_button.isEnabled() and view._related_snapshot is None
+
+
+def test_gui_graph_rejects_changed_analysis_revision(application, window):
+    view, root = window
+    (root / 'source.txt').write_text('galaxy astronomy', encoding='utf-8')
+    candidate = root / 'other.txt'
+    candidate.write_text('galaxy science', encoding='utf-8')
+    run_content_analysis(root)
+    view.query.setText('astronomy')
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    view.start_related_documents()
+    wait_until(application, lambda: view.worker is None)
+    view.open_related_graph()
+    graph = view.graph_dialog
+    graph.selector.setCurrentIndex(1)
+    candidate.write_text('replacement document longer', encoding='utf-8')
+    run_content_analysis(root)
+    graph.open_body.click()
+    wait_until(application, lambda: view.worker is None)
+    assert view.content_dialog is None and view.graph_dialog is None
+    assert view._outcome[0] == 'failed' and '분석 결과가 변경' in view.status.text()
+    assert view.table.rowCount() == 1
+
+
+def test_gui_empty_graph_and_parent_close_are_safe(application, window):
+    view, root = window
+    (root / 'source.txt').write_text('uniquekeyword', encoding='utf-8')
+    run_content_analysis(root)
+    view.query.setText('uniquekeyword')
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    view.start_related_documents()
+    wait_until(application, lambda: view.worker is None)
+    assert view._results == [] and view.graph_button.isEnabled()
+    view.open_related_graph()
+    assert len(view.graph_dialog.nodes) == 1 and not view.graph_dialog.edges
+    view.close()
+    application.processEvents()
+    assert view.graph_dialog is None and not view.isVisible()

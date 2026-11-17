@@ -29,6 +29,7 @@ from database.unified_search import search_all
 from database.file_contents import MAX_PREVIEW_CHARS, get_content_preview, list_analysis_results
 from database.document_chunks import find_matching_citation, get_document_chunk
 from database.related_documents import MAX_RELATED_RESULTS, find_related_documents
+from app.graph_view import RelatedGraphDialog
 
 MATCH_SOURCE_LABELS = {"content": "본문", "name": "파일명"}
 
@@ -251,6 +252,8 @@ class MainWindow(QMainWindow):
         self._view_mode = "search"
         self._search_target = "content"
         self.content_dialog = None
+        self.graph_dialog = None
+        self._related_snapshot = None
         self.settings_path = Path(settings_path) if settings_path is not None else default_settings_path()
         self._saved_settings, settings_notice = load_settings(self.settings_path)
 
@@ -353,11 +356,15 @@ class MainWindow(QMainWindow):
         self.related_button.setEnabled(False)
         self.related_button.setToolTip("저장된 본문의 공유 키워드로 후보를 찾습니다. 의미 유사성이나 실제 관계를 확정하는 결과는 아닙니다.")
         self.related_button.clicked.connect(self.start_related_documents)
+        self.graph_button = QPushButton('관계 그래프')
+        self.graph_button.setEnabled(False)
+        self.graph_button.clicked.connect(self.open_related_graph)
         open_row = QHBoxLayout()
         open_row.addWidget(self.selected_path, 1)
         open_row.addWidget(self.content_button)
         open_row.addWidget(self.citation_button)
         open_row.addWidget(self.related_button)
+        open_row.addWidget(self.graph_button)
         open_row.addWidget(self.open_button)
         self.progress = QProgressBar()
         self.progress.setRange(0, 1)
@@ -524,6 +531,7 @@ class MainWindow(QMainWindow):
         self._kind = kind
         self._outcome = ("cancelled", None)
         if kind not in ("preview", "citation", "related"):
+            self._related_snapshot = None
             self._results = []
             self.table.setRowCount(0)
             self.update_preview()
@@ -545,6 +553,7 @@ class MainWindow(QMainWindow):
         self.content_button.setEnabled(not busy and self.table.currentRow() >= 0)
         self.citation_button.setEnabled(not busy and self._can_open_citation())
         self.related_button.setEnabled(not busy and self.table.currentRow() >= 0)
+        self.graph_button.setEnabled(not busy and self._view_mode == 'related' and self._related_snapshot is not None)
         self.cancel.setEnabled(busy)
 
     @Slot()
@@ -609,6 +618,7 @@ class MainWindow(QMainWindow):
             related = self._kind == 'related'
             related_info = result if related else None
             if related:
+                self._related_snapshot = related_info
                 result = related_info['results']
             self._results = result
             self._view_mode = self._kind
@@ -649,6 +659,7 @@ class MainWindow(QMainWindow):
             if result:
                 self.table.selectRow(0)
             self.update_preview()
+            self.graph_button.setEnabled(related)
         if self._closing:
             self.close()
 
@@ -707,6 +718,33 @@ class MainWindow(QMainWindow):
         self._start_task('related', lambda cancelled, progress: find_related_documents(file_id, limit=limit, root_path=root, is_cancelled=cancelled))
 
     @Slot()
+    def open_related_graph(self):
+        if self.worker is not None or self._view_mode != 'related' or self._related_snapshot is None:
+            return
+        if self.graph_dialog is not None:
+            self.graph_dialog.raise_()
+            return
+        self.graph_dialog = RelatedGraphDialog(self._related_snapshot, self)
+        self.graph_dialog.fileActivated.connect(self._open_graph_content)
+        self.graph_dialog.finished.connect(self._clear_graph_dialog)
+        self.graph_dialog.show()
+
+    @Slot()
+    def _clear_graph_dialog(self):
+        self.graph_dialog = None
+
+    @Slot(object, str)
+    def _open_graph_content(self, file_id, revision):
+        if self.worker is not None or self._closing:
+            return
+        for index, row in enumerate(self._results):
+            if row['file_id'] == file_id:
+                self.table.selectRow(index)
+                self.update_preview()
+                break
+        self._start_task('preview', lambda cancelled, progress: get_content_preview(file_id, analyzed_at=revision))
+
+    @Slot()
     def _clear_content_dialog(self):
         self.content_dialog = None
         if self._closing and self.worker is None:
@@ -746,6 +784,8 @@ class MainWindow(QMainWindow):
             self.content_dialog.close()
             event.ignore()
         else:
+            if self.graph_dialog is not None:
+                self.graph_dialog.close()
             self._settings_timer.stop()
             self._save_settings()
             event.accept()
