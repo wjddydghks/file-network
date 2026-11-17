@@ -229,13 +229,18 @@ class MainWindow(QMainWindow):
         self.max_size.setValue(10)
         self.max_size.setSuffix(" MiB")
         self.max_size.setToolTip("파일 하나당 최대 분석 크기")
+        self.text_encoding = QComboBox()
+        self.text_encoding.addItem("자동 (BOM·UTF-8)", "auto")
+        self.text_encoding.addItem("UTF-8", "utf-8")
+        self.text_encoding.addItem("CP949 (한글 Windows)", "cp949")
+        self.text_encoding.setToolTip("폴더의 텍스트·코드에 적용합니다. CP949는 직접 선택하며 PDF/Office에는 적용하지 않습니다.")
         self.analyze = QPushButton("스캔·분석")
         self.analyze.clicked.connect(self.start_analysis)
         self.cancel = QPushButton("취소")
         self.cancel.setEnabled(False)
         self.cancel.clicked.connect(self.cancel_task)
         folder_row = QHBoxLayout()
-        for widget in (self.folder, self.browse, QLabel("파일 크기 제한"), self.max_size, self.analyze, self.cancel):
+        for widget in (self.folder, self.browse, QLabel("파일 크기 제한"), self.max_size, self.text_encoding, self.analyze, self.cancel):
             folder_row.addWidget(widget)
 
         self.query = QLineEdit()
@@ -342,8 +347,10 @@ class MainWindow(QMainWindow):
             self.status.setText(str(error))
             return
         max_bytes = self.max_size.value() * 1024 * 1024
+        text_encoding = self.text_encoding.currentData()
         self._start_task("analysis", lambda cancelled, progress: run_content_analysis(
             root, max_bytes=max_bytes, is_cancelled=cancelled, progress_callback=progress,
+            text_encoding=text_encoding,
         ))
 
     @Slot()
@@ -405,7 +412,7 @@ class MainWindow(QMainWindow):
         self.worker.start()
 
     def _set_busy(self, busy):
-        for widget in (self.folder, self.browse, self.max_size, self.analyze, self.query, self.search_target, self.all_folders, self.limit, self.search, self.table, self.analysis_filter, self.details_button):
+        for widget in (self.folder, self.browse, self.max_size, self.text_encoding, self.analyze, self.query, self.search_target, self.all_folders, self.limit, self.search, self.table, self.analysis_filter, self.details_button):
             widget.setEnabled(not busy)
         self.open_button.setEnabled(not busy and self.table.currentRow() >= 0)
         self.content_button.setEnabled(not busy and self.table.currentRow() >= 0)

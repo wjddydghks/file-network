@@ -51,9 +51,9 @@ def test_batch_results_are_stored_and_only_failures_retried(content_root, monkey
     calls = []
     original = analyze_content.extract_content
 
-    def tracked(path, max_bytes):
+    def tracked(path, max_bytes, **options):
         calls.append(path.name)
-        return original(path, max_bytes=max_bytes)
+        return original(path, max_bytes=max_bytes, **options)
 
     monkeypatch.setattr(analyze_content, "extract_content", tracked)
     counts = analyze_content.run_content_analysis(root, max_bytes=8)
@@ -129,8 +129,8 @@ def test_file_changed_during_extraction_is_not_saved(content_root, monkeypatch, 
     path.write_text("before", encoding="utf-8")
     original = analyze_content.extract_content
 
-    def changing_extract(path, max_bytes):
-        result = original(path, max_bytes=max_bytes)
+    def changing_extract(path, max_bytes, **options):
+        result = original(path, max_bytes=max_bytes, **options)
         if change == "modify":
             path.write_text("changed after reading", encoding="utf-8")
         else:
@@ -235,12 +235,12 @@ def test_batch_cancellation_keeps_completed_results_for_restart(content_root, mo
     original = analyze_content.extract_content
     calls = 0
 
-    def interrupt_second(path, max_bytes):
+    def interrupt_second(path, max_bytes, **options):
         nonlocal calls
         calls += 1
         if calls == 2:
             raise KeyboardInterrupt
-        return original(path, max_bytes=max_bytes)
+        return original(path, max_bytes=max_bytes, **options)
 
     monkeypatch.setattr(analyze_content, "extract_content", interrupt_second)
     monkeypatch.setattr("sys.argv", ["analyze_content", str(content_root)])

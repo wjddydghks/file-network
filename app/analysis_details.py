@@ -9,7 +9,7 @@ REASON_LABELS = {
     "UNSUPPORTED_TYPE": "지원하지 않는 형식",
     "TOO_LARGE": "파일 크기 제한 초과",
     "BINARY_CONTENT": "텍스트가 아닌 바이너리 내용",
-    "INVALID_ENCODING": "UTF-8 인코딩이 아님",
+    "INVALID_ENCODING": "선택한 텍스트 인코딩으로 읽을 수 없음",
     "READ_ERROR": "파일 읽기 실패",
     "NOT_REGULAR_FILE": "일반 파일이 아닌 경로",
     "DEPENDENCY_MISSING": "분석 라이브러리 설치 필요",
@@ -36,7 +36,7 @@ REASON_LABELS = {
 REASON_GUIDANCE = {
     "UNSUPPORTED_TYPE": "현재 이 형식은 본문 추출을 지원하지 않습니다. 원본 파일은 열 수 있습니다.",
     "TOO_LARGE": "파일 크기 제한을 늘린 뒤 스캔·분석을 다시 실행하세요.",
-    "INVALID_ENCODING": "현재 텍스트 추출은 UTF-8을 지원합니다. 필요한 경우 UTF-8 사본을 만들어 분석하세요.",
+    "INVALID_ENCODING": "기본 auto는 UTF-8 또는 BOM이 있는 UTF-16/UTF-32를 읽습니다. CP949 문서는 텍스트 인코딩을 CP949로 선택하거나 CLI --encoding cp949로 다시 분석하세요. 인코딩은 폴더의 텍스트/코드 전체에 적용되므로 혼합 폴더는 분리하거나 UTF-8 사본을 사용하세요.",
     "READ_ERROR": "파일이 존재하는지와 읽기 권한을 확인한 뒤 다시 분석하세요.",
     "DEPENDENCY_MISSING": "README의 분석 의존성 설치 방법을 확인하세요.",
     "ENCRYPTED_PDF": "현재 PDF 암호 입력을 지원하지 않습니다.",
