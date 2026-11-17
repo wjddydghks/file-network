@@ -1,6 +1,7 @@
 import argparse
 import json
 import sqlite3
+from app.console import configure_console
 
 from app.extract_text import positive_integer
 from database.content_search import MAX_RESULTS, search_content
@@ -9,6 +10,7 @@ from database.unified_search import search_all
 
 
 def main():
+    configure_console()
     parser = argparse.ArgumentParser(description="File Network - Content Search")
     parser.add_argument("query", help="검색어")
     parser.add_argument("--target", choices=("content", "name", "all"), default="content", help="검색 대상: 본문(content, 기본값), 파일명(name), 통합(all)")

@@ -1258,3 +1258,31 @@ def test_gui_cancels_real_pdf_between_pages(application, window, monkeypatch, cl
         wait_until(application, lambda: view.worker is None)
         assert view._outcome[0] == 'completed' and view._outcome[1]['extracted'] == 1
         assert 'third' in file_contents.get_file_content(identity)['text']
+
+
+@pytest.mark.parametrize('invalid,expected', [('x' * 4097, '4096'), (' '.join(['word'] * 101), '100')])
+def test_gui_invalid_search_keeps_related_results_and_recovers(application, window, invalid, expected):
+    view, root = window
+    (root / 'source.txt').write_text('galaxy astronomy', encoding='utf-8')
+    (root / 'other.txt').write_text('galaxy science', encoding='utf-8')
+    run_content_analysis(root)
+    view.query.setText('astronomy')
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    view.start_related_documents()
+    wait_until(application, lambda: view.worker is None)
+    before = list(view._results)
+    snapshot = view._related_snapshot
+    preview = view.preview.toPlainText()
+    view.query.setText(invalid)
+    view.start_search()
+    assert view.worker is None
+    assert expected in view.status.text()
+    assert view._results == before and view._related_snapshot is snapshot
+    assert view.table.currentRow() == 0 and view.preview.toPlainText() == preview
+    assert view.graph_button.isEnabled() and view.citation_button.isEnabled()
+    view.query.setText('science')
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    assert view._results[0]['name'] == 'other.txt'
+    assert view._related_snapshot is None and view._view_mode == 'search'
