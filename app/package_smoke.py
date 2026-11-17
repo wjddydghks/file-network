@@ -85,6 +85,12 @@ def run_smoke():
                 wait_for(lambda: view.worker is None)
                 if view._view_mode != 'related' or len(view._results) != 1 or 'sharedpackagemarker' not in view._results[0]['shared_keywords']:
                     raise RuntimeError('패키지 관련 문서 키워드 근거 검증 실패')
+                view.graph_button.click()
+                app.processEvents()
+                if view.graph_dialog is None or len(view.graph_dialog.nodes) != 2 or len(view.graph_dialog.edges) != 1:
+                    raise RuntimeError('패키지 관계 그래프 검증 실패')
+                view.graph_dialog.close()
+                app.processEvents()
                 view.query.setText('packagepdfkeyword')
                 view.start_search()
                 wait_for(lambda: view.worker is None)
@@ -146,6 +152,6 @@ def run_smoke():
     return {
         'success': True, 'frozen': frozen, 'platform': platform.platform(),
         'database_outside_bundle': outside_bundle, 'gui_platform': app.platformName(),
-        'gui': {'analysis': True, 'search': True, 'preview': True, 'citations': True, 'office_citations': True, 'matching_citation': True, 'related_documents': True, 'exclusions': True, 'settings_restore': True, 'writable_data_directory': True},
+        'gui': {'analysis': True, 'search': True, 'preview': True, 'citations': True, 'office_citations': True, 'matching_citation': True, 'related_documents': True, 'relation_graph': True, 'exclusions': True, 'settings_restore': True, 'writable_data_directory': True},
         'benchmark': benchmark,
     }
