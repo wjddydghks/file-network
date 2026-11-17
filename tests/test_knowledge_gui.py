@@ -1,4 +1,5 @@
 from threading import Event
+from pathlib import Path
 
 import pytest
 
@@ -66,7 +67,7 @@ def test_node_edge_file_list_body_original_and_cache_reopen(application,graph_wi
     wait_until(application,lambda:dialog.worker is None)
     assert '프로젝트' in dialog.body.toPlainText()
     opened=[];monkeypatch.setattr(knowledge_dialog.QDesktopServices,'openUrl',lambda url:opened.append(url.toLocalFile()) or True)
-    dialog.original.click();assert opened==[doc.path]
+    dialog.original.click();assert [Path(path) for path in opened]==[Path(doc.path)]
     dialog.close();wait_until(application,lambda:view.knowledge_dialog is None)
     view.knowledge_button.click();second=view.knowledge_dialog
     wait_until(application,lambda:second.plan is not None and second.worker is None)
