@@ -261,6 +261,7 @@ class MainWindow(QMainWindow):
         self.content_dialog = None
         self.graph_dialog = None
         self.area_dialog = None
+        self.knowledge_dialog = None
         self.ai_dialog = None
         self._related_snapshot = None
         self._related_scope = (None, 20)
@@ -391,11 +392,13 @@ class MainWindow(QMainWindow):
         self.folder_history.itemClicked.connect(self._select_history_folder)
         self.refresh_scope.clicked.connect(self.refresh_workspace_status)
         self.area_button.setEnabled(bool(self.folder.text().strip()))
+        self.knowledge_button.setEnabled(bool(self.folder.text().strip()))
         QTimer.singleShot(0, self.refresh_workspace_status)
 
     @Slot()
     def _scope_changed(self):
         self.area_button.setEnabled(self.worker is None and bool(self.folder.text().strip()))
+        self.knowledge_button.setEnabled(self.worker is None and bool(self.folder.text().strip()))
         self.folder.setToolTip(self.folder.text())
         self.scope_badge.setText('확인 중')
         self.scope_detail.setText('선택 범위의 저장 상태를 확인하고 있습니다.')
@@ -660,6 +663,7 @@ class MainWindow(QMainWindow):
         if busy and self._kind == 'analysis':
             self.scope_badge.setText('분석 중')
         self.area_button.setEnabled(not busy and bool(self.folder.text().strip()))
+        self.knowledge_button.setEnabled(not busy and bool(self.folder.text().strip()))
         self.folder_history.setEnabled(not busy)
         self.ai_button.setEnabled(not busy and self.table.currentRow() >= 0)
         self.open_button.setEnabled(not busy and self.table.currentRow() >= 0)
@@ -910,6 +914,33 @@ class MainWindow(QMainWindow):
             self.close()
 
     @Slot()
+    def open_knowledge_graph(self):
+        if self.worker is not None:
+            return
+        try:
+            root = self._root()
+            excluded = parse_excluded_dirs(self.excluded_dirs.text())
+        except (ValueError,OSError,RuntimeError) as error:
+            self.status.setText(str(error))
+            return
+        if self.knowledge_dialog is not None:
+            self.knowledge_dialog.raise_()
+            return
+        from app.knowledge_dialog import KnowledgeDialog
+        options = {'max_bytes':self.max_size.value()*1024*1024,'text_encoding':self.text_encoding.currentData(), 'excluded_dirs':excluded}
+        self.knowledge_dialog = KnowledgeDialog(root,self,analysis_options=options)
+        self.knowledge_dialog.finished.connect(self._clear_knowledge_dialog)
+        self.knowledge_dialog.show()
+
+    @Slot()
+    def _clear_knowledge_dialog(self):
+        self.knowledge_dialog = None
+        if self._closing and self.worker is None:
+            self.close()
+        else:
+            self.refresh_workspace_status()
+
+    @Slot()
     def open_area_map(self):
         if self.worker is not None:
             return
@@ -980,6 +1011,10 @@ class MainWindow(QMainWindow):
             self._closing = True
             self.cancel_task()
             event.ignore()
+        elif self.knowledge_dialog is not None and self.knowledge_dialog.worker is not None:
+            self._closing = True
+            self.knowledge_dialog.close()
+            event.ignore()
         elif self.area_dialog is not None and self.area_dialog.has_active_work:
             self._closing = True
             self.area_dialog.close()
@@ -999,6 +1034,8 @@ class MainWindow(QMainWindow):
             event.ignore()
         else:
             self._closing = True
+            if self.knowledge_dialog is not None:
+                self.knowledge_dialog.close()
             if self.area_dialog is not None:
                 self.area_dialog.close()
             if self.ai_dialog is not None:

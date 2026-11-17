@@ -625,7 +625,7 @@ def test_gui_worker_failure_restores_controls(application, window, monkeypatch):
     def fail(*args, **kwargs):
         raise RuntimeError("검색 오류")
 
-    monkeypatch.setattr(gui, "search_content", fail)
+    monkeypatch.setattr(gui, "search_all", fail)
     view.query.setText("keyword")
     view.start_search()
     wait_until(application, lambda: view.worker is None)
@@ -713,7 +713,7 @@ def test_gui_analysis_details_filter_reasons_open_and_switch_to_search(applicati
     view.query.setText("Hello")
     view.start_search()
     wait_until(application, lambda: view.worker is None)
-    assert view.table.columnCount() == 3
+    assert view.table.columnCount() == 4
     assert view.table.rowCount() == 1
     assert "[Hello]" in view.preview.toPlainText()
     assert "상태:" not in view.preview.toPlainText()

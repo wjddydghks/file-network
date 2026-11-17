@@ -19,7 +19,7 @@ class GuiSettings:
     folder: str = ''
     max_size_mib: int = 10
     text_encoding: str = 'auto'
-    search_target: str = 'content'
+    search_target: str = 'all'
     all_folders: bool = False
     result_limit: int = 100
     analysis_filter: str | None = None
