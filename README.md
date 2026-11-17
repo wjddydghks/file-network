@@ -456,7 +456,7 @@ JSON에는 형식별 개수·입력 크기·검증 결과가 추가되며 `--out
 
 ### 7.14 Windows 실행 배포본 (Python 설치 없이 실행)
 
-[GitHub Actions](https://github.com/wjddydghks/file-network/actions/workflows/ci.yml)의 main 또는 머지된 PR의 성공한 실행에서 **FileNetwork-Windows-x64** artifact를 내려받습니다. GitHub 로그인이 필요할 수 있으며 artifact는 14일 보관합니다.
+[Windows Desktop Build](https://github.com/wjddydghks/file-network/actions/workflows/desktop.yml)를 **Run workflow**로 수동 실행하면 선택한 브랜치의 세 OS 테스트가 성공한 뒤 Windows 배포본을 빌드·실행 검증합니다. 성공한 수동 실행의 **FileNetwork-Windows-x64** artifact를 내려받습니다. 일반 PR·main CI에서는 테스트만 진행하며 EXE·ZIP을 새로 만들지 않습니다. GitHub 로그인이 필요할 수 있으며 artifact는 14일 보관합니다.
 
 1. ZIP의 **모든 파일**을 한 폴더에 압축 해제합니다.
 2. **FileNetwork.exe**를 실행합니다. `_internal` 폴더를 지우거나 EXE만 따로 옮기면 실행되지 않습니다.
