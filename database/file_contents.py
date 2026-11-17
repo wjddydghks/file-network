@@ -75,10 +75,12 @@ ANALYSIS_STATUSES = ("EXTRACTED", "SKIPPED", "FAILED", "STALE", "PENDING")
 MAX_PREVIEW_CHARS = 100_000
 
 
-def get_content_preview(file_id):
+def get_content_preview(file_id, segment=0, analyzed_at=None):
     """활성 파일의 마지막 분석 결과를 반환하며 본문은 표시 길이만 조회한다."""
     if type(file_id) is not int or not 1 <= file_id < 2**63:
         raise ValueError("올바른 파일 ID를 지정하세요.")
+    if type(segment) is not int or not 0 <= segment < (2**63 - 1) // MAX_PREVIEW_CHARS:
+        raise ValueError("올바른 본문 구간을 지정하세요.")
     db.initialize_database()
     initialize_file_contents()
     with db.get_connection() as connection:
@@ -87,17 +89,25 @@ def get_content_preview(file_id):
                    COALESCE(file_contents.status, 'PENDING') AS status,
                    file_contents.reason, file_contents.error, file_contents.analyzed_at,
                    CASE WHEN file_contents.status = 'EXTRACTED'
-                        THEN COALESCE(substr(file_contents.text, 1, ?), '')
+                        THEN COALESCE(substr(file_contents.text, ?, ?), '')
                         ELSE '' END AS text,
                    CASE WHEN file_contents.status = 'EXTRACTED'
                         THEN COALESCE(length(file_contents.text), 0)
                         ELSE 0 END AS total_chars
             FROM files LEFT JOIN file_contents ON files.id = file_contents.file_id
             WHERE files.id = ? AND files.scan_status != 'DELETED'
-        """, (MAX_PREVIEW_CHARS, file_id)).fetchone()
+        """, (segment * MAX_PREVIEW_CHARS + 1, MAX_PREVIEW_CHARS, file_id)).fetchone()
         if row is None:
             return None
         result = dict(row)
+        if analyzed_at is not None and result['analyzed_at'] != analyzed_at:
+            raise ValueError("분석 결과가 변경되었습니다. 처음부터 새로 읽기를 누르세요.")
+        result['segment_count'] = max(1, (result['total_chars'] + MAX_PREVIEW_CHARS - 1) // MAX_PREVIEW_CHARS)
+        if result['status'] != 'EXTRACTED':
+            segment = 0
+        elif segment >= result['segment_count']:
+            raise ValueError("존재하지 않는 본문 구간입니다. 처음부터 새로 읽기를 누르세요.")
+        result['segment'] = segment
         result['truncated'] = result['total_chars'] > MAX_PREVIEW_CHARS
         return result
 

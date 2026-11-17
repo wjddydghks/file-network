@@ -51,6 +51,148 @@ def window(application, tmp_path, monkeypatch):
     application.processEvents()
 
 
+def test_gui_content_segments_navigation_find_refresh_and_changed_revision(application, window):
+    from database import file_contents
+    from core.extractors.text import TextExtractionResult
+    view, root = window
+    path = root / 'note.txt'
+    text = ('prefix line\n' * 10_000)[:file_contents.MAX_PREVIEW_CHARS] + 'Alpha needle beta NEEDLE'
+    path.write_bytes(text.encode('utf-8'))
+    run_content_analysis(root)
+    view.query.setText('needle')
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    view.start_content_preview()
+    wait_until(application, lambda: view.worker is None)
+    dialog = view.content_dialog
+    assert not dialog.previous.isEnabled() and dialog.next.isEnabled()
+    QTest.mouseClick(dialog.next, Qt.MouseButton.LeftButton)
+    assert dialog.worker is not None
+    assert not dialog.next.isEnabled()
+    wait_until(application, lambda: dialog.worker is None)
+    assert dialog.body.toPlainText() == 'Alpha needle beta NEEDLE'
+    assert '구간 2/2' in dialog.summary.text()
+    assert dialog.previous.isEnabled() and not dialog.next.isEnabled()
+    from PySide6.QtGui import QKeySequence
+    assert dialog.find_shortcut.key() == QKeySequence(QKeySequence.StandardKey.Find)
+    dialog.find_shortcut.activated.emit()
+    application.processEvents()
+    assert dialog.find_query.hasFocus()
+    dialog.find_query.setText('needle')
+    QTest.keyClick(dialog.find_query, Qt.Key.Key_Return)
+    first = dialog.body.textCursor().selectionStart()
+    assert dialog.body.textCursor().selectedText() == 'needle'
+    dialog.find_next()
+    second = dialog.body.textCursor().selectionStart()
+    assert second > first
+    dialog.find_next()
+    assert dialog.body.textCursor().selectionStart() == first
+    dialog.find_next(backward=True)
+    assert dialog.body.textCursor().selectionStart() == second
+    dialog.find_query.setText('missing')
+    dialog.find_next()
+    assert '없습니다' in dialog.status.text()
+    dialog.find_query.clear()
+    dialog.find_next()
+    assert '입력하세요' in dialog.status.text()
+    QTest.mouseClick(dialog.previous, Qt.MouseButton.LeftButton)
+    wait_until(application, lambda: dialog.worker is None)
+    assert dialog.body.toPlainText() == text[:file_contents.MAX_PREVIEW_CHARS]
+    # A separately reanalyzed document must not be mixed with this snapshot.
+    file_id = view._results[0]['file_id']
+    file_contents.save_file_content(file_id, TextExtractionResult(str(path), 'EXTRACTED', text='new analysis'), 'new')
+    dialog.load_segment(1)
+    wait_until(application, lambda: dialog.worker is None)
+    assert dialog.body.toPlainText() == ''
+    assert '변경' in dialog.status.text()
+    assert not dialog.next.isEnabled()
+    QTest.mouseClick(dialog.refresh, Qt.MouseButton.LeftButton)
+    wait_until(application, lambda: dialog.worker is None)
+    assert dialog.body.toPlainText() == 'new analysis'
+    assert '구간 1/1' in dialog.summary.text()
+    dialog.close()
+    assert view.content_dialog is None
+    assert view.table.rowCount() == 1
+
+
+@pytest.mark.parametrize('close_method', ['close', 'escape', 'parent'])
+def test_gui_segment_worker_close_escape_and_parent_wait_safely(application, window, monkeypatch, close_method):
+    view, root = window
+    (root / 'note.txt').write_bytes(b'needle')
+    run_content_analysis(root)
+    view.query.setText('needle')
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    view.start_content_preview()
+    wait_until(application, lambda: view.worker is None)
+    dialog = view.content_dialog
+    started = Event()
+    release = Event()
+
+    def slow_preview(*args, **kwargs):
+        started.set()
+        assert release.wait(5)
+        return None
+
+    monkeypatch.setattr(gui, 'get_content_preview', slow_preview)
+    dialog.load_segment(0, refresh=True)
+    try:
+        wait_until(application, started.is_set)
+        heartbeat = []
+        QTimer.singleShot(0, lambda: heartbeat.append(True))
+        wait_until(application, lambda: bool(heartbeat))
+        if close_method == 'escape':
+            QTest.keyClick(dialog, Qt.Key.Key_Escape)
+        elif close_method == 'parent':
+            view.close()
+        else:
+            dialog.close()
+        assert dialog.worker is not None
+        assert dialog._closing
+    finally:
+        release.set()
+    wait_until(application, lambda: view.content_dialog is None)
+    if close_method == 'parent':
+        assert not view.isVisible()
+
+
+def test_gui_segment_deleted_and_query_error_clear_text_and_allow_refresh(application, window, monkeypatch):
+    from app.incremental_scan import run_incremental_scan
+    view, root = window
+    path = root / 'note.txt'
+    path.write_bytes(b'needle')
+    run_content_analysis(root)
+    view.query.setText('needle')
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    view.start_content_preview()
+    wait_until(application, lambda: view.worker is None)
+    dialog = view.content_dialog
+    original = gui.get_content_preview
+
+    def fail(*args, **kwargs):
+        raise RuntimeError('구간 조회 오류')
+
+    monkeypatch.setattr(gui, 'get_content_preview', fail)
+    dialog.load_segment(0, refresh=True)
+    wait_until(application, lambda: dialog.worker is None)
+    assert dialog.body.toPlainText() == ''
+    assert '구간 조회 오류' in dialog.status.text()
+    assert dialog.refresh.isEnabled()
+    monkeypatch.setattr(gui, 'get_content_preview', original)
+    dialog.load_segment(0, refresh=True)
+    wait_until(application, lambda: dialog.worker is None)
+    assert dialog.body.toPlainText() == 'needle'
+    path.unlink()
+    run_incremental_scan(root)
+    dialog.load_segment(0, refresh=True)
+    wait_until(application, lambda: dialog.worker is None)
+    assert dialog.body.toPlainText() == ''
+    assert '찾을 수 없습니다' in dialog.status.text()
+    assert not dialog.find_forward.isEnabled()
+    dialog.close()
+
+
 def test_gui_stored_content_preview_preserves_search_and_handles_changed_file(application, window):
     from app.incremental_scan import run_incremental_scan
 
@@ -113,7 +255,7 @@ def test_gui_preview_from_pending_details_and_truncation(application, window):
     wait_until(application, lambda: view.worker is None)
     assert len(view.content_dialog.body.toPlainText()) == file_contents.MAX_PREVIEW_CHARS
     assert '100,001' in view.content_dialog.summary.text()
-    assert '앞 100,000자만' in view.content_dialog.summary.text()
+    assert '구간 1/2' in view.content_dialog.summary.text()
     assert view.table.columnCount() == 4
     view.content_dialog.close()
 
