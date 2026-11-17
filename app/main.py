@@ -1,4 +1,5 @@
 import argparse
+from app.console import configure_console
 
 from database.db import (
     initialize_database,
@@ -12,6 +13,7 @@ from core.scanner.exclusions import validate_excluded_dirs
 
 
 def main():
+    configure_console()
     parser = argparse.ArgumentParser(
         description="File Network - File Scanner"
     )

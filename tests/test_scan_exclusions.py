@@ -160,6 +160,8 @@ def test_cli_repeatable_exclusions(root, module):
     write(root, 'kept.txt')
     program = "from pathlib import Path; from database import db; db.DB_PATH=Path(__import__('sys').argv.pop(1)); from " + module + " import main; main()"
     command = [sys.executable, '-c', program, str(db.DB_PATH), str(root), '--exclude-dir', 'skip', '--exclude-dir', 'cache']
-    result = subprocess.run(command, cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, encoding='utf-8', errors='replace')
+    env = dict(os.environ, PYTHONIOENCODING='cp1252')
+    result = subprocess.run(command, cwd=Path(__file__).resolve().parents[1], env=env, capture_output=True, text=True, encoding='utf-8')
     assert result.returncode == 0, result.stderr
+    assert '완료' in result.stdout
     assert [r['name'] for r in db.get_active_files_under(root)] == ['kept.txt']

@@ -2,6 +2,7 @@ import argparse
 import json
 from pathlib import Path
 import stat
+from app.console import configure_console
 
 from app.extract_text import positive_integer
 from app.incremental_scan import run_incremental_scan
@@ -102,6 +103,7 @@ def run_content_analysis(root_path, max_bytes=DEFAULT_MAX_BYTES, is_cancelled=No
 
 
 def main():
+    configure_console()
     parser = argparse.ArgumentParser(description="File Network - Batch Content Analyzer")
     parser.add_argument("path", help="스캔하고 내용을 분석할 디렉터리")
     parser.add_argument("--max-bytes", type=positive_integer, default=DEFAULT_MAX_BYTES)

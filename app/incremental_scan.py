@@ -1,4 +1,5 @@
 import argparse
+from app.console import configure_console
 from pathlib import Path
 
 from database import db
@@ -295,6 +296,7 @@ def run_incremental_scan(root_path, is_cancelled=None, progress_callback=None, e
 
 
 def main():
+    configure_console()
     parser = argparse.ArgumentParser(
         description="File Network Incremental Scanner"
     )

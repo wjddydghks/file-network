@@ -515,6 +515,8 @@ python -m app.incremental_scan "C:/Users/me" --exclude-dir node_modules --exclud
 python -m app.analyze_content "C:/Users/me" --exclude-dir node_modules --exclude-dir .venv
 ```
 
+세 스캔·분석 CLI의 표준 출력·오류는 UTF-8을 사용하므로 Windows에서 파이프나 파일로 전달할 때도 한글 출력 때문에 중단되지 않습니다.
+
 CLI 제외 옵션은 해당 실행에만 적용하며 GUI 설정과 공유하지 않습니다. 전체 PC 분석은 우선 필요한 문서·프로젝트 폴더부터 진행하는 것이 좋습니다. 이 기능이 수십만~수백만 파일 규모의 속도나 메모리 사용량을 보장하는 것은 아닙니다.
 
 ## 8. 개발 현황
