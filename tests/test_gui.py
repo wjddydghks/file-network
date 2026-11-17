@@ -1219,3 +1219,42 @@ def test_gui_empty_graph_and_parent_close_are_safe(application, window):
     view.close()
     application.processEvents()
     assert view.graph_dialog is None and not view.isVisible()
+
+
+@pytest.mark.parametrize('close_window', [False, True])
+def test_gui_cancels_real_pdf_between_pages(application, window, monkeypatch, close_window):
+    from database import file_contents
+    from tests.test_pdf_extraction import make_pdf
+    view, root = window
+    make_pdf(root / 'note.pdf', ('first', 'second', 'third'))
+    started, resume = Event(), Event()
+    calls = []
+    actual = pymupdf.Page.get_text
+    def page_text(page, *args, **kwargs):
+        result = actual(page, *args, **kwargs)
+        calls.append(page.number)
+        if len(calls) == 1:
+            started.set()
+            assert resume.wait(5), 'GUI did not release the current parser call'
+        return result
+    monkeypatch.setattr(pymupdf.Page, 'get_text', page_text)
+    view.start_analysis()
+    try:
+        wait_until(application, started.is_set)
+        if close_window:
+            view.close()
+        else:
+            view.cancel_task()
+    finally:
+        resume.set()
+    wait_until(application, lambda: view.worker is None)
+    assert view._outcome[0] == 'cancelled' and calls == [0]
+    identity = db.get_active_files_under(root)[0]['id']
+    assert file_contents.get_file_content(identity) is None
+    if close_window:
+        assert not view.isVisible()
+    else:
+        view.start_analysis()
+        wait_until(application, lambda: view.worker is None)
+        assert view._outcome[0] == 'completed' and view._outcome[1]['extracted'] == 1
+        assert 'third' in file_contents.get_file_content(identity)['text']

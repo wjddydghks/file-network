@@ -4,6 +4,7 @@ from pathlib import Path
 import stat
 
 from core.scanner.scanner import classify_file
+from core.operations import check_cancelled
 
 
 DEFAULT_MAX_BYTES = 1024 * 1024
@@ -34,12 +35,13 @@ class TextExtractionResult:
     source_spans: tuple[SourceSpan, ...] = ()
 
 
-def extract_text(file_path, max_bytes=DEFAULT_MAX_BYTES, encoding="auto"):
+def extract_text(file_path, max_bytes=DEFAULT_MAX_BYTES, encoding="auto", is_cancelled=None):
     """TEXT/CODE를 엄격하게 디코딩하며 auto는 BOM 또는 UTF-8만 사용한다."""
     validate_text_encoding(encoding)
     if not isinstance(max_bytes, int) or max_bytes <= 0:
         raise ValueError("max_bytes는 양의 정수여야 합니다.")
 
+    check_cancelled(is_cancelled)
     path = Path(file_path).expanduser()
     result_path = str(path)
 
@@ -52,6 +54,7 @@ def extract_text(file_path, max_bytes=DEFAULT_MAX_BYTES, encoding="auto"):
 
         with path.open("rb") as source:
             content = source.read(max_bytes + 1)
+            check_cancelled(is_cancelled)
     except OSError as error:
         return TextExtractionResult(result_path, "FAILED", reason="READ_ERROR", error=str(error))
 
@@ -80,4 +83,5 @@ def extract_text(file_path, max_bytes=DEFAULT_MAX_BYTES, encoding="auto"):
     if "\x00" in text:
         return TextExtractionResult(result_path, "SKIPPED", reason="BINARY_CONTENT")
 
+    check_cancelled(is_cancelled)
     return TextExtractionResult(result_path, "EXTRACTED", text=text)
