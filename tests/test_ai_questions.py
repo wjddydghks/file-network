@@ -299,3 +299,23 @@ def test_invalid_model_and_non_ascii_approval_rejected(context):
     plan = plan_for(context)
     with pytest.raises(ValueError, match='승인'):
         service.ask_question(plan, '승인')
+
+
+def test_gui_session_key_does_not_mutate_environment(context, monkeypatch):
+    monkeypatch.delenv('FILE_NETWORK_AI_ENABLED')
+    monkeypatch.delenv('OPENAI_API_KEY')
+    calls = []
+    monkeypatch.setattr(service, '_request', lambda *a: calls.append(a) or response())
+    plan = plan_for(context)
+    service.ask_question(plan, plan.approval_id(), api_key='session-test-key', enabled=True)
+    assert calls[0][1] == 'session-test-key'
+    import os
+    assert 'OPENAI_API_KEY' not in os.environ and 'FILE_NETWORK_AI_ENABLED' not in os.environ
+
+
+def test_cancelled_before_dispatch_never_calls_provider(context):
+    from core.operations import OperationCancelled
+    plan = plan_for(context)
+    with pytest.raises(OperationCancelled):
+        service.ask_question(plan, plan.approval_id(), is_cancelled=lambda: True)
+    assert not audit_rows()
