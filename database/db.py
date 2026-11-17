@@ -1,9 +1,10 @@
 import sqlite3
 from os import sep
 from pathlib import Path
+from app.storage import default_database_path, is_frozen
 
 
-DB_PATH = Path(__file__).resolve().parent / "file_network.db"
+DB_PATH = default_database_path()
 
 
 class _ClosingConnection(sqlite3.Connection):
@@ -32,6 +33,8 @@ def _file_identity_row(cursor, row):
 
 
 def get_connection():
+    if is_frozen():
+        Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, factory=_ClosingConnection)
     conn.row_factory = _file_identity_row
     conn.execute("PRAGMA foreign_keys = ON")

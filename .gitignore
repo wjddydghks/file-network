@@ -23,3 +23,9 @@ venv/
 # macOS
 .DS_Store
 
+
+# Desktop build output
+build/
+dist/
+package-smoke-*.json
+benchmark-*.json
