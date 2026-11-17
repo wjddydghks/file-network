@@ -5,6 +5,9 @@ from core.operations import check_cancelled
 import sqlite3
 
 
+CITATION_SEARCH_BATCH_SIZE = 128
+
+
 def get_document_chunk(file_id, segment=0, analyzed_at=None):
     if type(file_id) is not int or not 1 <= file_id < 2**63:
         raise ValueError("올바른 파일 ID를 지정하세요.")
@@ -61,25 +64,40 @@ def find_matching_citation(file_id, query, is_cancelled=None):
         connection.execute('PRAGMA temp_store = MEMORY')
         connection.execute('BEGIN')
         snapshot = connection.execute("""
-            SELECT fc.analyzed_at FROM file_contents fc JOIN files f ON f.id=fc.file_id
+            SELECT fc.analyzed_at, fc.text FROM file_contents fc JOIN files f ON f.id=fc.file_id
             WHERE fc.file_id=? AND fc.status='EXTRACTED' AND f.scan_status!='DELETED'
         """, (file_id,)).fetchone()
         if snapshot is None:
             return None
+        revision = snapshot['analyzed_at']
+        # 기존 SQLite substr(text, ...)와 같이 NUL 이후는 검색하지 않는다.
+        body = (snapshot['text'] or '').split('\x00', 1)[0]
         if is_cancelled is not None:
             connection.set_progress_handler(lambda: int(bool(is_cancelled())), 1000)
         try:
             connection.execute("CREATE VIRTUAL TABLE temp.citation_matches USING fts5(text, content='', tokenize='unicode61')")
-            connection.execute("""
-                INSERT INTO citation_matches(rowid, text)
-                SELECT chunk_index + 1, substr(fc.text, c.start_char + 1, c.end_char - c.start_char)
-                FROM document_chunks c JOIN file_contents fc ON fc.file_id=c.file_id
-                WHERE c.file_id=?
-            """, (file_id,))
-            match = connection.execute("""
-                SELECT rowid FROM citation_matches WHERE citation_matches MATCH ?
-                ORDER BY rowid LIMIT 1
-            """, (match_query,)).fetchone()
+            chunks = connection.execute('''
+                SELECT chunk_index,start_char,end_char FROM document_chunks
+                WHERE file_id=? ORDER BY chunk_index
+            ''', (file_id,))
+            match = None
+            while True:
+                check_cancelled(is_cancelled)
+                batch = chunks.fetchmany(CITATION_SEARCH_BATCH_SIZE)
+                if not batch:
+                    break
+                def values():
+                    for chunk in batch:
+                        check_cancelled(is_cancelled)
+                        yield chunk['chunk_index'] + 1, body[chunk['start_char']:chunk['end_char']]
+                connection.executemany('INSERT INTO citation_matches(rowid,text) VALUES(?,?)', values())
+                match = connection.execute('''
+                    SELECT rowid FROM citation_matches WHERE citation_matches MATCH ?
+                    ORDER BY rowid LIMIT 1
+                ''', (match_query,)).fetchone()
+                if match is not None:
+                    break
+                connection.execute("INSERT INTO citation_matches(citation_matches) VALUES('delete-all')")
         except sqlite3.OperationalError as error:
             check_cancelled(is_cancelled)
             if 'no such module: fts5' in str(error):
@@ -87,10 +105,12 @@ def find_matching_citation(file_id, query, is_cancelled=None):
             raise
         finally:
             connection.set_progress_handler(None, 0)
+    # 미리보기의 DB 조회 전에 큰 본문 참조와 임시 색인을 해제한다.
+    del snapshot, body
     check_cancelled(is_cancelled)
     if match is None:
         return None
-    result = get_document_chunk(file_id, segment=match[0] - 1, analyzed_at=snapshot['analyzed_at'])
+    result = get_document_chunk(file_id, segment=match[0] - 1, analyzed_at=revision)
     if result is None or result['status'] != 'EXTRACTED' or not result['chunk_count']:
         return None
     return result
