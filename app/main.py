@@ -8,6 +8,7 @@ from database.db import (
 )
 
 from core.scanner.scanner import scan_directory
+from core.scanner.exclusions import validate_excluded_dirs
 
 
 def main():
@@ -20,7 +21,12 @@ def main():
         help="스캔할 디렉터리 경로"
     )
 
+    parser.add_argument('--exclude-dir', action='append', default=[], help='모든 깊이에서 제외할 폴더명 (반복 가능)')
     args = parser.parse_args()
+    try:
+        excluded_dirs = validate_excluded_dirs(args.exclude_dir)
+    except ValueError as error:
+        parser.error(str(error))
 
     print("=" * 50)
     print("       FILE NETWORK SCANNER")
@@ -30,7 +36,7 @@ def main():
 
     total_saved = 0
 
-    for batch in scan_directory(args.path):
+    for batch in scan_directory(args.path, excluded_dirs=excluded_dirs):
         saved = save_files(batch)
         total_saved += saved
 

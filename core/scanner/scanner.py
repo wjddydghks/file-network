@@ -3,6 +3,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 from core.operations import check_cancelled
+from core.scanner.exclusions import validate_excluded_dirs
 
 
 def classify_file(extension):
@@ -61,7 +62,8 @@ def classify_file(extension):
     return "OTHER"
 
 
-def scan_directory(root_path, batch_size=500, scan_stats=None, is_cancelled=None):
+def scan_directory(root_path, batch_size=500, scan_stats=None, is_cancelled=None, excluded_dirs=()):
+    excluded = {os.path.normcase(name) for name in validate_excluded_dirs(excluded_dirs)}
     root = Path(root_path).expanduser().resolve()
 
     if not root.exists():
@@ -76,6 +78,7 @@ def scan_directory(root_path, batch_size=500, scan_stats=None, is_cancelled=None
     scan_stats["error_count"] = 0
     scan_stats["directory_error_count"] = 0
     scan_stats["file_error_count"] = 0
+    scan_stats["excluded_directory_count"] = 0
 
     stack = [str(root)]
     batch = []
@@ -94,6 +97,9 @@ def scan_directory(root_path, batch_size=500, scan_stats=None, is_cancelled=None
                             continue
 
                         if entry.is_dir(follow_symlinks=False):
+                            if os.path.normcase(entry.name) in excluded:
+                                scan_stats["excluded_directory_count"] += 1
+                                continue
                             stack.append(entry.path)
                             continue
 

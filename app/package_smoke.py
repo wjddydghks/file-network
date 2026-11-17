@@ -40,6 +40,8 @@ def run_smoke():
         root = base / 'scan'
         root.mkdir()
         (root / 'package-note.txt').write_bytes('한글 packagekeyword'.encode('utf-8'))
+        (root / 'package-ignore').mkdir()
+        (root / 'package-ignore' / 'hidden.txt').write_text('excludedpackagekeyword', encoding='utf-8')
         with pymupdf.open() as document:
             for text in ('', 'packagepdfkeyword page two', '', 'page four'):
                 page = document.new_page()
@@ -54,11 +56,14 @@ def run_smoke():
             try:
                 view.folder.setText(str(root))
                 view.limit.setValue(7)
+                view.excluded_dirs.setText('package-ignore')
                 view.show()
                 view.start_analysis()
                 wait_for(lambda: view.worker is None)
                 if view._outcome[0] != 'completed' or view._outcome[1]['extracted'] != 2:
                     raise RuntimeError(f'패키지 GUI 분석 실패: {view._outcome}')
+                if len(db.get_active_files_under(root)) != 2:
+                    raise RuntimeError('패키지 제외 폴더가 스캔되었습니다.')
                 view.query.setText('packagekeyword')
                 view.start_search()
                 wait_for(lambda: view.worker is None)
@@ -98,7 +103,7 @@ def run_smoke():
                 app.processEvents()
             restored = MainWindow(settings_path=base / 'settings.json')
             try:
-                if restored.limit.value() != 7 or restored.folder.text() != str(root) or restored.query.text():
+                if restored.limit.value() != 7 or restored.folder.text() != str(root) or restored.query.text() or restored.excluded_dirs.text() != 'package-ignore':
                     raise RuntimeError('패키지 설정 복원 실패')
                 if restored.worker is not None:
                     raise RuntimeError('시작 시 자동 작업이 실행되었습니다.')
@@ -111,6 +116,6 @@ def run_smoke():
     return {
         'success': True, 'frozen': frozen, 'platform': platform.platform(),
         'database_outside_bundle': outside_bundle, 'gui_platform': app.platformName(),
-        'gui': {'analysis': True, 'search': True, 'preview': True, 'citations': True, 'settings_restore': True, 'writable_data_directory': True},
+        'gui': {'analysis': True, 'search': True, 'preview': True, 'citations': True, 'exclusions': True, 'settings_restore': True, 'writable_data_directory': True},
         'benchmark': benchmark,
     }

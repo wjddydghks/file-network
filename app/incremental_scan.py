@@ -9,6 +9,7 @@ from database.scan_sessions import (
 )
 from core.scanner.scanner import scan_directory
 from core.operations import check_cancelled
+from core.scanner.exclusions import ExcludedDirectories, validate_excluded_dirs
 
 
 def get_existing_files(files):
@@ -82,8 +83,10 @@ def get_identity(file):
     return device_id, inode
 
 
-def run_incremental_scan(root_path, is_cancelled=None, progress_callback=None):
+def run_incremental_scan(root_path, is_cancelled=None, progress_callback=None, excluded_dirs=()):
+    excluded_dirs = validate_excluded_dirs(excluded_dirs)
     root = Path(root_path).expanduser().resolve()
+    exclusions = ExcludedDirectories(root, excluded_dirs)
 
     if not root.exists():
         raise FileNotFoundError(f"경로가 존재하지 않습니다: {root}")
@@ -112,6 +115,8 @@ def run_incremental_scan(root_path, is_cancelled=None, progress_callback=None):
     try:
         check_cancelled(is_cancelled)
         scan_options = {"batch_size": 500, "scan_stats": scan_stats}
+        if excluded_dirs:
+            scan_options["excluded_dirs"] = excluded_dirs
         if is_cancelled is not None:
             scan_options["is_cancelled"] = is_cancelled
         for batch in scan_directory(
@@ -161,6 +166,7 @@ def run_incremental_scan(root_path, is_cancelled=None, progress_callback=None):
         missing_files = [
             file for file in old_files
             if file["path"] not in seen_paths
+            and not exclusions.contains_file(file["path"])
         ]
 
         # 이동 후보를 식별자 기준으로 그룹화한다.
@@ -280,6 +286,7 @@ def run_incremental_scan(root_path, is_cancelled=None, progress_callback=None):
     print(f"변경 없는 파일: {unchanged_count:,}개")
     print(f"이동 파일: {moved_count:,}개")
     print(f"접근 오류: {scan_stats['error_count']:,}건")
+    print(f"제외한 폴더: {scan_stats.get('excluded_directory_count', 0):,}개")
     print(f"삭제 파일: {deleted_count:,}개")
     print(f"스캔 완전성: {'완료' if scan_complete else '불완전'}")
     print(f"DB 활성 파일: {db.get_active_file_count():,}개")
@@ -297,10 +304,13 @@ def main():
         help="스캔할 디렉터리 경로"
     )
 
+    parser.add_argument('--exclude-dir', action='append', default=[], help='모든 깊이에서 제외할 폴더명 (반복 가능)')
     args = parser.parse_args()
 
     try:
-        run_incremental_scan(args.path)
+        run_incremental_scan(args.path, excluded_dirs=args.exclude_dir)
+    except ValueError as error:
+        parser.error(str(error))
     except KeyboardInterrupt:
         print("\n스캔이 취소되었습니다. 이미 저장된 변경 사항은 유지됩니다.")
         raise SystemExit(130) from None
