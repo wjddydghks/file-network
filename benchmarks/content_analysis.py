@@ -52,7 +52,7 @@ def run_benchmark(file_count=1000, dataset="text"):
         return original_connection()
 
     with TemporaryDirectory(prefix='file-network-benchmark-') as directory:
-        base = Path(directory)
+        base = Path(directory).resolve()
         root = base / 'scan'
         documents = []
         started = perf_counter()

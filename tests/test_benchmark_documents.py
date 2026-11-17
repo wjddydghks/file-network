@@ -1,4 +1,5 @@
 import json
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -13,10 +14,13 @@ def test_mixed_benchmark_checks_all_formats_changes_and_temp_cleanup(tmp_path, m
     monkeypatch.setattr(db, 'DB_PATH', original_db)
     original_temporary_directory = benchmark.TemporaryDirectory
     created = []
+    @contextmanager
     def temporary_directory(*args, **kwargs):
-        directory = original_temporary_directory(*args, **kwargs)
-        created.append(Path(directory.name))
-        return directory
+        with original_temporary_directory(*args, **kwargs) as directory:
+            base = Path(directory)
+            created.append(base)
+            (base / 'alias').mkdir()
+            yield str(base / 'alias' / '..')
     monkeypatch.setattr(benchmark, 'TemporaryDirectory', temporary_directory)
     report = benchmark.run_benchmark(18, dataset='mixed')
     assert report['dataset'] == 'mixed'
