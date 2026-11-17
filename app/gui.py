@@ -28,6 +28,7 @@ from database.file_search import search_filename
 from database.unified_search import search_all
 from database.file_contents import MAX_PREVIEW_CHARS, get_content_preview, list_analysis_results
 from database.document_chunks import find_matching_citation, get_document_chunk
+from database.related_documents import MAX_RELATED_RESULTS, find_related_documents
 
 MATCH_SOURCE_LABELS = {"content": "본문", "name": "파일명"}
 
@@ -348,10 +349,15 @@ class MainWindow(QMainWindow):
         self.citation_button.setEnabled(False)
         self.citation_button.setToolTip("완료한 본문 검색의 모든 검색어가 포함된 첫 인용을 엽니다. 검색어가 여러 인용에 나뉘면 일치 인용이 없을 수 있습니다.")
         self.citation_button.clicked.connect(self.start_matching_citation)
+        self.related_button = QPushButton("관련 문서 보기")
+        self.related_button.setEnabled(False)
+        self.related_button.setToolTip("저장된 본문의 공유 키워드로 후보를 찾습니다. 의미 유사성이나 실제 관계를 확정하는 결과는 아닙니다.")
+        self.related_button.clicked.connect(self.start_related_documents)
         open_row = QHBoxLayout()
         open_row.addWidget(self.selected_path, 1)
         open_row.addWidget(self.content_button)
         open_row.addWidget(self.citation_button)
+        open_row.addWidget(self.related_button)
         open_row.addWidget(self.open_button)
         self.progress = QProgressBar()
         self.progress.setRange(0, 1)
@@ -517,12 +523,12 @@ class MainWindow(QMainWindow):
     def _start_task(self, kind, operation):
         self._kind = kind
         self._outcome = ("cancelled", None)
-        if kind not in ("preview", "citation"):
+        if kind not in ("preview", "citation", "related"):
             self._results = []
             self.table.setRowCount(0)
             self.update_preview()
         self._set_busy(True)
-        self.status.setText({"analysis": "스캔·분석 중…", "search": "검색 중…", "details": "분석 내역 조회 중…", "preview": "저장된 본문 조회 중…", "citation": "일치 인용 조회 중…"}[kind])
+        self.status.setText({"analysis": "스캔·분석 중…", "search": "검색 중…", "details": "분석 내역 조회 중…", "preview": "저장된 본문 조회 중…", "citation": "일치 인용 조회 중…", "related": "공유 키워드로 관련 문서 조회 중…"}[kind])
         self.progress.setRange(0, 0)
         self.worker = TaskThread(operation, self)
         self.worker.completed.connect(self._completed)
@@ -538,6 +544,7 @@ class MainWindow(QMainWindow):
         self.open_button.setEnabled(not busy and self.table.currentRow() >= 0)
         self.content_button.setEnabled(not busy and self.table.currentRow() >= 0)
         self.citation_button.setEnabled(not busy and self._can_open_citation())
+        self.related_button.setEnabled(not busy and self.table.currentRow() >= 0)
         self.cancel.setEnabled(busy)
 
     @Slot()
@@ -599,14 +606,20 @@ class MainWindow(QMainWindow):
                 self.content_dialog.show()
                 self.status.setText("검색어가 모두 포함된 첫 인용을 표시합니다. 이전·다음 구간은 검색 일치 여부와 무관한 일반 인용 탐색입니다." if self._kind == 'citation' else "마지막 분석 시점의 저장된 본문을 표시합니다.")
         else:
+            related = self._kind == 'related'
+            related_info = result if related else None
+            if related:
+                result = related_info['results']
             self._results = result
             self._view_mode = self._kind
             if self._kind == 'search':
                 self._results_query = self._pending_search_query
             details = self._view_mode == "details"
-            unified = not details and self._search_target == "all"
+            unified = self._view_mode == 'search' and self._search_target == "all"
             match_label = "일치 파일명" if self._search_target == "name" else "일치 본문"
-            if details:
+            if related:
+                headers = ["파일명", "공유 키워드", "경로", "일치 본문"]
+            elif details:
                 headers = ["파일명", "상태", "사유", "경로"]
             elif unified:
                 headers = ["파일명", "일치 위치", "경로", "일치 내용"]
@@ -616,7 +629,9 @@ class MainWindow(QMainWindow):
             self.table.setHorizontalHeaderLabels(headers)
             self.table.setRowCount(len(result))
             for row_index, row in enumerate(result):
-                if details:
+                if related:
+                    values = (row['name'], ', '.join(row['shared_keywords']), row['path'], row['snippet'])
+                elif details:
                     values = (row["name"], STATUS_LABELS.get(row["status"], row["status"]), reason_label(row), row["path"])
                 elif unified:
                     values = (row["name"], MATCH_SOURCE_LABELS[row["match_source"]], row["path"], row["snippet"])
@@ -624,12 +639,16 @@ class MainWindow(QMainWindow):
                     values = (row["name"], row["path"], row["snippet"])
                 for column, value in enumerate(values):
                     self.table.setItem(row_index, column, QTableWidgetItem(value or ""))
-            if details:
+            if related:
+                terms = ', '.join(item['term'] for item in related_info['keywords']) or '없음'
+                self.status.setText(f"기준: {related_info['source']['name']} — 관련 후보 {len(result):,}개 (최대 {MAX_RELATED_RESULTS}). 선정 키워드: {terms}. 공유 키워드 근거이며 실제 관계를 확정하지 않습니다.")
+            elif details:
                 self.status.setText(f"분석 내역 {len(result):,}개 — 최대 {self.limit.value():,}개 표시. 마지막으로 확인한 상태입니다.")
             else:
                 self.status.setText(f"검색 결과 {len(result):,}개" if result else "검색 결과가 없습니다. 폴더와 검색어, 분석 여부를 확인하세요.")
             if result:
                 self.table.selectRow(0)
+            self.update_preview()
         if self._closing:
             self.close()
 
@@ -641,20 +660,26 @@ class MainWindow(QMainWindow):
             text = format_analysis_detail(result) if self._view_mode == "details" else result["snippet"] or ""
             if self._view_mode != "details" and result.get("match_source"):
                 text = f"일치 위치: {MATCH_SOURCE_LABELS[result['match_source']]}\n\n{text}"
+            if self._view_mode == 'related':
+                text = f"공유 키워드: {', '.join(result['shared_keywords'])}\n\n{text}"
             self.preview.setPlainText(text)
             self.selected_path.setText(result["path"])
             self.open_button.setEnabled(self.worker is None)
             self.content_button.setEnabled(self.worker is None)
             self.citation_button.setEnabled(self.worker is None and self._can_open_citation())
+            self.related_button.setEnabled(self.worker is None)
         else:
             self.preview.clear()
             self.selected_path.setText("선택된 파일 없음")
             self.open_button.setEnabled(False)
             self.content_button.setEnabled(False)
             self.citation_button.setEnabled(False)
+            self.related_button.setEnabled(False)
 
     def _can_open_citation(self):
         index = self.table.currentRow()
+        if 0 <= index < len(self._results) and self._view_mode == 'related':
+            return bool(self._results[index]['shared_keywords'])
         return (0 <= index < len(self._results) and self._view_mode == 'search'
                 and self._search_target != 'name' and bool(self._results_query)
                 and self._results[index].get('match_source') != 'name')
@@ -664,8 +689,22 @@ class MainWindow(QMainWindow):
         if self.worker is not None or not self._can_open_citation():
             return
         file_id = self._results[self.table.currentRow()]['file_id']
-        query = self._results_query
+        query = ' '.join(self._results[self.table.currentRow()]['shared_keywords']) if self._view_mode == 'related' else self._results_query
         self._start_task('citation', lambda cancelled, progress: find_matching_citation(file_id, query, is_cancelled=cancelled))
+
+    @Slot()
+    def start_related_documents(self):
+        index = self.table.currentRow()
+        if self.worker is not None or not 0 <= index < len(self._results):
+            return
+        try:
+            root = None if self.all_folders.isChecked() else self._root()
+        except (ValueError, OSError, RuntimeError) as error:
+            self.status.setText(str(error))
+            return
+        file_id = self._results[index]['file_id']
+        limit = min(self.limit.value(), MAX_RELATED_RESULTS)
+        self._start_task('related', lambda cancelled, progress: find_related_documents(file_id, limit=limit, root_path=root, is_cancelled=cancelled))
 
     @Slot()
     def _clear_content_dialog(self):

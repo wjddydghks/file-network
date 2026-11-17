@@ -40,7 +40,7 @@ def run_smoke():
         base = Path(directory).resolve()
         root = base / 'scan'
         root.mkdir()
-        (root / 'package-note.txt').write_bytes('한글 packagekeyword'.encode('utf-8'))
+        (root / 'package-note.txt').write_bytes('한글 packagekeyword sharedpackagemarker'.encode('utf-8'))
         workbook = Workbook()
         workbook.active.title = '검증 자료'
         workbook.active['A1'] = 'packageofficekeyword'
@@ -50,7 +50,7 @@ def run_smoke():
         (root / 'package-ignore').mkdir()
         (root / 'package-ignore' / 'hidden.txt').write_text('excludedpackagekeyword', encoding='utf-8')
         with pymupdf.open() as document:
-            for text in ('', 'packagepdfkeyword page two', '', 'page four'):
+            for text in ('', 'packagepdfkeyword page two sharedpackagemarker', '', 'page four'):
                 page = document.new_page()
                 if text:
                     page.insert_text((72, 72), text)
@@ -81,6 +81,10 @@ def run_smoke():
                 if view.content_dialog is None or 'packagekeyword' not in view.content_dialog.body.toPlainText():
                     raise RuntimeError('패키지 본문 미리보기 실패')
                 view.content_dialog.close()
+                view.related_button.click()
+                wait_for(lambda: view.worker is None)
+                if view._view_mode != 'related' or len(view._results) != 1 or 'sharedpackagemarker' not in view._results[0]['shared_keywords']:
+                    raise RuntimeError('패키지 관련 문서 키워드 근거 검증 실패')
                 view.query.setText('packagepdfkeyword')
                 view.start_search()
                 wait_for(lambda: view.worker is None)
@@ -142,6 +146,6 @@ def run_smoke():
     return {
         'success': True, 'frozen': frozen, 'platform': platform.platform(),
         'database_outside_bundle': outside_bundle, 'gui_platform': app.platformName(),
-        'gui': {'analysis': True, 'search': True, 'preview': True, 'citations': True, 'office_citations': True, 'matching_citation': True, 'exclusions': True, 'settings_restore': True, 'writable_data_directory': True},
+        'gui': {'analysis': True, 'search': True, 'preview': True, 'citations': True, 'office_citations': True, 'matching_citation': True, 'related_documents': True, 'exclusions': True, 'settings_restore': True, 'writable_data_directory': True},
         'benchmark': benchmark,
     }
