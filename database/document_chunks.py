@@ -18,6 +18,9 @@ def get_document_chunk(file_id, segment=0, analyzed_at=None):
                    COALESCE(substr(fc.text, chunk.start_char + 1,
                        chunk.end_char - chunk.start_char), '') AS text,
                    chunk.start_char, chunk.end_char, chunk.page,
+                   COALESCE(chunk.source_kind, CASE WHEN chunk.page IS NOT NULL THEN 'page'
+                       WHEN chunk.chunk_index IS NOT NULL THEN 'text' END) AS source_kind,
+                   chunk.source_label,
                    CASE WHEN fc.status = 'EXTRACTED' THEN COALESCE(length(fc.text), 0)
                         ELSE 0 END AS total_chars,
                    (SELECT COUNT(*) FROM document_chunks c

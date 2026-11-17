@@ -14,7 +14,7 @@ from database import db, file_contents
 from core.scanner.exclusions import ExcludedDirectories, validate_excluded_dirs
 
 
-EXTRACTOR_VERSION = 5
+EXTRACTOR_VERSION = 6
 
 
 def source_fingerprint(path, max_bytes, text_encoding="auto"):

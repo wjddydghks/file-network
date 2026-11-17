@@ -4,7 +4,7 @@ from pathlib import Path
 import stat
 from zipfile import BadZipFile, ZipFile
 
-from core.extractors.text import DEFAULT_MAX_BYTES, TextExtractionResult
+from core.extractors.text import DEFAULT_MAX_BYTES, SourceSpan, TextExtractionResult
 
 
 SUPPORTED_EXTENSIONS = {".docx", ".xlsx", ".pptx"}
@@ -59,35 +59,49 @@ def _read_docx(content, max_chars):
     return _join_limited(_docx_parts(Document(BytesIO(content)), max_chars), max_chars)
 
 
+def _join_sections(sections, max_chars, kind):
+    collected = []
+    spans = []
+    length = 0
+    for label, text in sections:
+        if not text:
+            continue
+        start = length + (1 if collected else 0)
+        length = start + len(text)
+        if length > max_chars:
+            raise _LimitReached("TEXT_LIMIT_EXCEEDED")
+        collected.append(text)
+        spans.append(SourceSpan(start, length, None, kind=kind, label=label))
+    return "\n".join(collected), tuple(spans)
+
+
 def _read_xlsx(content, max_chars, max_cells):
     from openpyxl import load_workbook
 
     workbook = load_workbook(BytesIO(content), read_only=True, data_only=False, keep_links=False)
     try:
-        def parts():
+        def sections():
             visited = 0
             declared = 0
             for sheet in workbook.worksheets:
                 declared += (sheet.max_row or 0) * (sheet.max_column or 0)
                 if declared > max_cells:
                     raise _LimitReached("CELL_LIMIT_EXCEEDED")
-                # 잘못 축소된 차원 정보 때문에 실제 셀을 누락하지 않는다.
                 sheet.reset_dimensions()
-                started = False
-                for row in sheet.iter_rows(values_only=True):
-                    visited += max(len(row), 1)
-                    if visited > max_cells:
-                        raise _LimitReached("CELL_LIMIT_EXCEEDED")
-                    text = _join_limited(
-                        (str(value) if value is not None else "" for value in row),
-                        max_chars, separator="\t",
-                    )
-                    if text:
-                        if not started:
-                            yield f"시트: {sheet.title}"
-                            started = True
-                        yield text
-        return _join_limited(parts(), max_chars)
+                def rows():
+                    nonlocal visited
+                    for row in sheet.iter_rows(values_only=True):
+                        visited += max(len(row), 1)
+                        if visited > max_cells:
+                            raise _LimitReached("CELL_LIMIT_EXCEEDED")
+                        yield _join_limited(
+                            (str(value) if value is not None else "" for value in row),
+                            max_chars, separator="\t",
+                        )
+                body = _join_limited(rows(), max_chars)
+                if body:
+                    yield sheet.title, f"시트: {sheet.title}\n{body}"
+        return _join_sections(sections(), max_chars, 'sheet')
     finally:
         workbook.close()
 
@@ -118,16 +132,12 @@ def _read_pptx(content, max_chars, max_slides):
     if len(presentation.slides) > max_slides:
         raise _LimitReached("SLIDE_LIMIT_EXCEEDED")
 
-    def parts():
+    def sections():
         for number, slide in enumerate(presentation.slides, 1):
-            started = False
-            for text in _pptx_shape_parts(slide.shapes, max_chars):
-                if text.strip():
-                    if not started:
-                        yield f"슬라이드: {number}"
-                        started = True
-                    yield text
-    return _join_limited(parts(), max_chars)
+            body = _join_limited(_pptx_shape_parts(slide.shapes, max_chars), max_chars)
+            if body:
+                yield str(number), f"슬라이드: {number}\n{body}"
+    return _join_sections(sections(), max_chars, 'slide')
 
 
 def extract_office(
@@ -171,15 +181,16 @@ def extract_office(
             required = {".docx": "word/document.xml", ".xlsx": "xl/workbook.xml", ".pptx": "ppt/presentation.xml"}[extension]
             if required not in archive.namelist():
                 raise BadZipFile("문서 형식에 필요한 Office 구성 요소가 없습니다.")
+        spans = ()
         if extension == ".docx":
             text = _read_docx(content, max_text_chars)
         elif extension == ".xlsx":
-            text = _read_xlsx(content, max_text_chars, max_cells)
+            text, spans = _read_xlsx(content, max_text_chars, max_cells)
         else:
-            text = _read_pptx(content, max_text_chars, max_slides)
+            text, spans = _read_pptx(content, max_text_chars, max_slides)
         if not text:
             return TextExtractionResult(result_path, "SKIPPED", reason="NO_TEXT")
-        return TextExtractionResult(result_path, "EXTRACTED", text=text)
+        return TextExtractionResult(result_path, "EXTRACTED", text=text, source_spans=spans)
     except _LimitReached as error:
         return TextExtractionResult(result_path, "SKIPPED", reason=error.reason)
     except ImportError as error:

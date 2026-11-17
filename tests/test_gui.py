@@ -952,3 +952,31 @@ def test_gui_excluded_folders_analysis_validation_and_reset(application, window)
     restored.deleteLater()
     view.reset_settings()
     assert view.excluded_dirs.text() == ''
+
+
+@pytest.mark.parametrize('extension,location', [('.xlsx', "Excel 시트: <b>한글'&>"), ('.pptx', 'PowerPoint 슬라이드: 2')])
+def test_gui_office_citation_original_locations_plain_text(application, window, extension, location):
+    from tests.test_office_citations import make_sections
+    view, root = window
+    make_sections(root / ('note' + extension), [('빈 시작', ''), ("<b>한글'&>", 'officecitationkeyword'), ('빈 중간', ''), ('마지막', 'last body')])
+    run_content_analysis(root)
+    view.query.setText('officecitationkeyword')
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    view.start_content_preview()
+    wait_until(application, lambda: view.worker is None)
+    dialog = view.content_dialog
+    dialog.mode.setCurrentIndex(dialog.mode.findData('chunks'))
+    wait_until(application, lambda: dialog.worker is None)
+    assert location in dialog.summary.text()
+    assert dialog.summary.textFormat() == Qt.TextFormat.PlainText
+    assert 'officecitationkeyword' in dialog.body.toPlainText()
+    dialog.next.click()
+    wait_until(application, lambda: dialog.worker is None)
+    assert 'last body' in dialog.body.toPlainText()
+    assert ('Excel 시트: 마지막' if extension == '.xlsx' else 'PowerPoint 슬라이드: 4') in dialog.summary.text()
+    dialog.mode.setCurrentIndex(dialog.mode.findData('text'))
+    wait_until(application, lambda: dialog.worker is None)
+    assert 'officecitationkeyword' in dialog.body.toPlainText() and 'last body' in dialog.body.toPlainText()
+    dialog.close()
+    application.processEvents()
