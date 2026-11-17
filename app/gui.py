@@ -257,6 +257,7 @@ class MainWindow(QMainWindow):
         self._search_target = "content"
         self.content_dialog = None
         self.graph_dialog = None
+        self.ai_dialog = None
         self._related_snapshot = None
         self._related_scope = (None, 20)
         self._pending_related_scope = (None, 20)
@@ -367,8 +368,12 @@ class MainWindow(QMainWindow):
         self.graph_button = QPushButton('관계 그래프')
         self.graph_button.setEnabled(False)
         self.graph_button.clicked.connect(lambda: self.open_related_graph())
+        self.ai_button = QPushButton('AI 질문')
+        self.ai_button.setEnabled(False)
+        self.ai_button.clicked.connect(self.open_ai_dialog)
         open_row = QHBoxLayout()
         open_row.addWidget(self.selected_path, 1)
+        open_row.addWidget(self.ai_button)
         open_row.addWidget(self.content_button)
         open_row.addWidget(self.citation_button)
         open_row.addWidget(self.related_button)
@@ -559,6 +564,7 @@ class MainWindow(QMainWindow):
     def _set_busy(self, busy):
         for widget in (self.folder, self.excluded_dirs, self.browse, self.max_size, self.text_encoding, self.analyze, self.query, self.search_target, self.all_folders, self.limit, self.search, self.table, self.analysis_filter, self.details_button, self.reset_settings_button):
             widget.setEnabled(not busy)
+        self.ai_button.setEnabled(not busy and self.table.currentRow() >= 0)
         self.open_button.setEnabled(not busy and self.table.currentRow() >= 0)
         self.content_button.setEnabled(not busy and self.table.currentRow() >= 0)
         self.citation_button.setEnabled(not busy and self._can_open_citation())
@@ -700,6 +706,7 @@ class MainWindow(QMainWindow):
             self.selected_path.setText(result["path"])
             self.open_button.setEnabled(self.worker is None)
             self.content_button.setEnabled(self.worker is None)
+            self.ai_button.setEnabled(self.worker is None)
             self.citation_button.setEnabled(self.worker is None and self._can_open_citation())
             self.related_button.setEnabled(self.worker is None)
         else:
@@ -707,6 +714,7 @@ class MainWindow(QMainWindow):
             self.selected_path.setText("선택된 파일 없음")
             self.open_button.setEnabled(False)
             self.content_button.setEnabled(False)
+            self.ai_button.setEnabled(False)
             self.citation_button.setEnabled(False)
             self.related_button.setEnabled(False)
 
@@ -800,6 +808,25 @@ class MainWindow(QMainWindow):
             self.close()
 
     @Slot()
+    def open_ai_dialog(self):
+        row = self.table.currentRow()
+        if self.worker is not None or not 0 <= row < len(self._results):
+            return
+        if self.ai_dialog is not None:
+            self.ai_dialog.raise_()
+            return
+        from app.ai_dialog import AIQuestionDialog
+        self.ai_dialog = AIQuestionDialog(self._results, row, self)
+        self.ai_dialog.finished.connect(self._clear_ai_dialog)
+        self.ai_dialog.show()
+
+    @Slot()
+    def _clear_ai_dialog(self):
+        self.ai_dialog = None
+        if self._closing and self.worker is None:
+            self.close()
+
+    @Slot()
     def start_content_preview(self):
         index = self.table.currentRow()
         if self.worker is not None or not 0 <= index < len(self._results):
@@ -828,11 +855,17 @@ class MainWindow(QMainWindow):
             self._closing = True
             self.cancel_task()
             event.ignore()
+        elif self.ai_dialog is not None and self.ai_dialog.worker is not None:
+            self._closing = True
+            self.ai_dialog.close()
+            event.ignore()
         elif self.content_dialog is not None and self.content_dialog.worker is not None:
             self._closing = True
             self.content_dialog.close()
             event.ignore()
         else:
+            if self.ai_dialog is not None:
+                self.ai_dialog.close()
             if self.graph_dialog is not None:
                 self.graph_dialog.close()
             self._settings_timer.stop()

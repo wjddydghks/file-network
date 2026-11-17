@@ -76,6 +76,19 @@ def run_smoke():
                 wait_for(lambda: view.worker is None)
                 if len(view._results) != 1 or 'packagekeyword' not in view.preview.toPlainText():
                     raise RuntimeError('패키지 GUI 검색 실패')
+                view.ai_button.click()
+                if view.ai_dialog is None:
+                    raise RuntimeError('패키지 AI 화면 열기 실패')
+                ai = view.ai_dialog
+                ai.add.click()
+                ai.question.setPlainText('선택 인용을 요약하세요.')
+                ai.prepare.click()
+                wait_for(lambda: ai.worker is None)
+                if (ai._plan is None or ai.enabled.isChecked() or ai.send.isEnabled()
+                        or not ai.preview.toPlainText() or 'packagekeyword' not in ai.preview.toPlainText()):
+                    raise RuntimeError('패키지 AI 로컬 미리보기 검증 실패')
+                ai.close()
+                wait_for(lambda: view.ai_dialog is None)
                 view.start_content_preview()
                 wait_for(lambda: view.worker is None)
                 if view.content_dialog is None or 'packagekeyword' not in view.content_dialog.body.toPlainText():
@@ -141,6 +154,7 @@ def run_smoke():
             finally:
                 view.close()
                 wait_for(lambda: view.worker is None)
+                wait_for(lambda: view.ai_dialog is None or view.ai_dialog.worker is None)
                 wait_for(lambda: view.content_dialog is None or view.content_dialog.worker is None)
                 view.close()
                 view.deleteLater()
@@ -160,6 +174,6 @@ def run_smoke():
     return {
         'success': True, 'frozen': frozen, 'platform': platform.platform(),
         'database_outside_bundle': outside_bundle, 'gui_platform': app.platformName(),
-        'gui': {'analysis': True, 'search': True, 'preview': True, 'citations': True, 'office_citations': True, 'matching_citation': True, 'related_documents': True, 'relation_graph': True, 'graph_navigation': True, 'exclusions': True, 'settings_restore': True, 'writable_data_directory': True, 'internal_db_exclusion': True},
+        'gui': {'analysis': True, 'search': True, 'preview': True, 'citations': True, 'office_citations': True, 'matching_citation': True, 'related_documents': True, 'relation_graph': True, 'graph_navigation': True, 'exclusions': True, 'settings_restore': True, 'writable_data_directory': True, 'internal_db_exclusion': True, 'ai_local_preview': True},
         'benchmark': benchmark,
     }

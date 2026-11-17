@@ -12,6 +12,7 @@ import uuid
 
 from core.ai_questions import check_current_sources, validate_plan
 from database import db
+from core.operations import check_cancelled
 
 MAX_RESPONSE_BYTES = 65536
 
@@ -102,19 +103,23 @@ def _parse_answer(response, plan):
         raise AIServiceError('AI 응답 형식 또는 근거 인용이 올바르지 않습니다.') from None
 
 
-def ask_question(plan, approval_id):
-    if os.environ.get('FILE_NETWORK_AI_ENABLED') != '1':
+def ask_question(plan, approval_id, *, api_key=None, enabled=None, is_cancelled=None):
+    active = os.environ.get('FILE_NETWORK_AI_ENABLED') == '1' if enabled is None else enabled is True
+    if not active:
         raise ValueError('외부 AI가 비활성화되어 있습니다. FILE_NETWORK_AI_ENABLED=1로 명시적으로 활성화하세요.')
     if (not isinstance(approval_id, str) or not re.fullmatch(r'[0-9a-f]{64}', approval_id)
             or not hmac.compare_digest(approval_id, plan.approval_id())):
         raise ValueError('현재 전송 내용에 대한 승인이 필요합니다.')
+    check_cancelled(is_cancelled)
     validate_plan(plan)
     check_current_sources(plan)
-    key = os.environ.get('OPENAI_API_KEY', '')
-    if not key or not key.isascii() or any(c.isspace() or ord(c) < 33 or ord(c) > 126 for c in key):
-        raise ValueError('올바른 OPENAI_API_KEY 환경변수를 설정하세요. 키는 입력·로그·설정 파일에 저장하지 않습니다.')
+    key = os.environ.get('OPENAI_API_KEY', '') if api_key is None else api_key
+    if not isinstance(key, str) or not key or not key.isascii() or any(c.isspace() or ord(c) < 33 or ord(c) > 126 for c in key):
+        raise ValueError('올바른 OpenAI API 키를 입력하거나 OPENAI_API_KEY 환경변수를 설정하세요. 키는 로그·설정 파일에 저장하지 않습니다.')
+    check_cancelled(is_cancelled)
     request_id = _audit_start(plan)
     try:
+        check_cancelled(is_cancelled)
         response = _request(plan.payload(), key)
         result = _parse_answer(response, plan)
         _audit_finish(request_id, 'succeeded')
