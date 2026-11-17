@@ -39,7 +39,7 @@ def window(application, tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
     root = tmp_path / "scan"
     root.mkdir()
-    view = gui.MainWindow()
+    view = gui.MainWindow(settings_path=tmp_path / 'settings.json')
     view.folder.setText(str(root))
     view.show()
     application.processEvents()
@@ -419,6 +419,130 @@ def test_gui_windows_text_encoding_analysis_search_and_preview(application, wind
     assert view.content_dialog.body.toPlainText() == text
     view.content_dialog.close()
     assert path.read_bytes() == original
+
+
+def test_gui_settings_autosave_restore_without_query_or_automatic_work(application, window):
+    from app.gui_settings import load_settings
+    from database import db
+    view, root = window
+    view.max_size.setValue(25)
+    view.text_encoding.setCurrentIndex(view.text_encoding.findData('cp949'))
+    view.search_target.setCurrentIndex(view.search_target.findData('all'))
+    view.all_folders.setChecked(True)
+    view.limit.setValue(42)
+    view.analysis_filter.setCurrentIndex(view.analysis_filter.findData('FAILED'))
+    view.query.setText('private search term')
+    wait_until(application, lambda: view.settings_path.exists())
+    saved, notice = load_settings(view.settings_path)
+    assert notice is None
+    assert saved.folder == str(root) and saved.result_limit == 42
+    assert 'private search term' not in view.settings_path.read_text(encoding='utf-8')
+    view.close()
+    restored = gui.MainWindow(settings_path=view.settings_path)
+    try:
+        restored.show()
+        application.processEvents()
+        assert restored._current_settings() == saved
+        assert '통합 검색어' in restored.query.placeholderText()
+        assert restored.query.text() == ''
+        assert restored.worker is None and restored.table.rowCount() == 0
+        assert not db.DB_PATH.exists()
+    finally:
+        restored.close()
+        restored.deleteLater()
+        application.processEvents()
+
+
+@pytest.mark.parametrize('payload', [b'{broken', b'{"version": 999}', b'{"folder":"\\ud800"}'])
+def test_gui_corrupt_settings_startup_and_close_preserve_original(application, tmp_path, monkeypatch, payload):
+    path = tmp_path / 'settings.json'
+    path.write_bytes(payload)
+    monkeypatch.setattr(db, 'DB_PATH', tmp_path / 'must-not-create.db')
+    view = gui.MainWindow(settings_path=path)
+    try:
+        view.show()
+        application.processEvents()
+        assert view.settings_status.text()
+        assert view.settings_status.isVisible()
+        assert view.worker is None and view.folder.text() == ''
+        view.close()
+        assert path.read_bytes() == payload
+        assert not db.DB_PATH.exists()
+    finally:
+        view.close()
+        view.deleteLater()
+        application.processEvents()
+
+
+def test_gui_reset_settings_keeps_original_file_and_analysis_database(application, window):
+    from app.gui_settings import GuiSettings, load_settings
+    from database.content_search import search_content
+    view, root = window
+    path = root / 'note.txt'
+    path.write_bytes(b'hello keyword')
+    run_content_analysis(root)
+    view.limit.setValue(77)
+    view.search_target.setCurrentIndex(view.search_target.findData('all'))
+    QTest.mouseClick(view.reset_settings_button, Qt.MouseButton.LeftButton)
+    assert view._current_settings() == GuiSettings()
+    assert load_settings(view.settings_path)[0] == GuiSettings()
+    assert path.read_bytes() == b'hello keyword'
+    assert len(search_content('keyword')) == 1
+    assert '기본값' in view.status.text()
+
+
+def test_gui_settings_save_error_does_not_block_analysis_and_can_retry(application, window, monkeypatch):
+    from app.gui_settings import GuiSettings, load_settings
+    view, root = window
+    (root / 'note.txt').write_bytes(b'hello')
+    original_save = gui.save_settings
+    original_save(view.settings_path, GuiSettings(folder='before'))
+    original_bytes = view.settings_path.read_bytes()
+    def denied(*args):
+        raise PermissionError('read only preferences')
+    monkeypatch.setattr(gui, 'save_settings', denied)
+    view.limit.setValue(200)
+    wait_until(application, lambda: '저장 실패' in view.settings_status.text())
+    assert view.settings_path.read_bytes() == original_bytes
+    assert view.analyze.isEnabled()
+    view.start_analysis()
+    wait_until(application, lambda: view.worker is None)
+    assert '추출 1' in view.status.text()
+    monkeypatch.setattr(gui, 'save_settings', original_save)
+    view._save_settings()
+    assert load_settings(view.settings_path)[0].result_limit == 200
+    assert view.settings_status.text() == ''
+
+
+def test_gui_settings_saved_after_close_waits_for_analysis_cancellation(application, window, monkeypatch):
+    from app.gui_settings import load_settings
+    view, _ = window
+    started = Event()
+    view.limit.setValue(37)
+    view.text_encoding.setCurrentIndex(view.text_encoding.findData('cp949'))
+    monkeypatch.setattr(gui, 'run_content_analysis', slow_analysis(started))
+    view.start_analysis()
+    wait_until(application, started.is_set)
+    assert not view.reset_settings_button.isEnabled()
+    view.close()
+    wait_until(application, lambda: view.worker is None and not view.isVisible())
+    settings, _ = load_settings(view.settings_path)
+    assert settings.result_limit == 37 and settings.text_encoding == 'cp949'
+
+
+def test_gui_default_settings_location_uses_standard_config_directory(application, tmp_path, monkeypatch):
+    from app.gui_settings import GuiSettings, save_settings
+    target = tmp_path / 'standard-config' / 'file-network' / 'gui-settings.json'
+    save_settings(target, GuiSettings(folder='remembered folder'))
+    monkeypatch.setattr(gui.QStandardPaths, 'writableLocation', lambda location: str(target.parent.parent))
+    view = gui.MainWindow()
+    try:
+        assert view.settings_path == target
+        assert view.folder.text() == 'remembered folder'
+    finally:
+        view.close()
+        view.deleteLater()
+        application.processEvents()
 
 
 def test_gui_real_text_and_pdf_analysis_search_preview_and_open(application, window, monkeypatch):
