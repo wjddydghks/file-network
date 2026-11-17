@@ -1,4 +1,5 @@
 """영역 전체 자동 분류. 전송 계획 승인 한 번, 단계별 검증/저장, 자동 재시도 없음."""
+from dataclasses import replace
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 import hmac
 import json
@@ -9,7 +10,7 @@ from types import SimpleNamespace
 from core.ai_questions import DEFAULT_MODEL
 from core.knowledge_graph import (BATCH_SIZE, KnowledgePlan, empty_state, payload,
                                   catalog_frontier, validate_assignments, validate_catalog, validate_config,
-                                  validate_groups, validate_summaries, resolve_record_mapping)
+                                  validate_groups, validate_summaries, resolve_record_mapping, local_summary, assign_from_taxonomy)
 from core.operations import check_cancelled
 from core.scanner.exclusions import validate_excluded_dirs
 from database import knowledge
@@ -26,7 +27,18 @@ def prepare_knowledge(root, interest='', model=DEFAULT_MODEL, is_cancelled=None,
     validate_config(interest, model)
     excluded_dirs=validate_excluded_dirs(excluded_dirs)
     documents = knowledge.read_documents(root, is_cancelled, progress, excluded_dirs)
-    return KnowledgePlan(root, interest, model, documents, knowledge.read_cache(root, interest, model),excluded_dirs)
+    plan=KnowledgePlan(root,interest,model,documents,knowledge.read_cache(root,interest,model),excluded_dirs)
+    state=plan.state()
+    if state and state['topics'] and not state['complete']:
+        # Finish a previously approved, cached taxonomy entirely locally; no key or paid request.
+        state['assignments']=assign_from_taxonomy(plan,state)
+        knowledge.verify_quotes(plan.eligible,[(alias,m['quote']) for alias,ms in state['assignments'].items() for m in ms])
+        state['complete']=True
+        token=knowledge.acquire(plan)
+        try:knowledge.save(plan,token,state)
+        finally:knowledge.release(plan,token)
+        plan=replace(plan,cached_json=knowledge.read_cache(root,interest,model))
+    return plan
 
 
 def _decode(response, key):
@@ -108,64 +120,58 @@ def run_knowledge(plan, approval_id, *, max_calls, api_key=None, enabled=False, 
             if progress:
                 progress({'phase': phase, 'done': done, 'total': total, 'calls': calls})
 
-        def process_batches(documents, stage, target):
+        # Local preparation replaces the entire per-file summary API stage.
+        for index,doc in enumerate(plan.eligible):
+            check_cancelled(is_cancelled)
+            if doc.alias not in state['summaries']:
+                state['summaries'][doc.alias]=local_summary(doc)
+        knowledge.save(plan,token,state)
+        if progress:progress({'phase':'summarize','done':len(state['summaries']),'total':len(plan.eligible),'calls':0})
+
+        def process_reductions(tasks):
             nonlocal calls
-            batches = [documents[i:i+BATCH_SIZE] for i in range(0,len(documents),BATCH_SIZE)]
-            offset, error = 0, None
-            with ThreadPoolExecutor(max_workers=2, thread_name_prefix='knowledge') as pool:
-                pending = set()
-                while pending or offset < len(batches):
-                    # At most two already-approved calls in flight. Never retry or exceed the budget.
+            offset,error=0,None
+            with ThreadPoolExecutor(max_workers=2,thread_name_prefix='knowledge') as pool:
+                pending={}
+                while pending or offset<len(tasks):
                     while (error is None and not (is_cancelled and is_cancelled()) and len(pending)<2
-                           and offset<len(batches) and calls<max_calls):
-                        batch=batches[offset];offset+=1;calls+=1
-                        pending.add(pool.submit(_call,plan,batch,key,is_cancelled,stage=stage,
-                                                topics=state['topics'],interests=state['interests']))
-                    if not pending:
-                        break
-                    ready,pending=wait(pending,return_when=FIRST_COMPLETED)
+                           and offset<len(tasks) and calls<max_calls):
+                        task,records=tasks[offset];offset+=1;calls+=1
+                        future=pool.submit(_call,plan,(),key,is_cancelled,stage='reduce',records=records)
+                        pending[future]=task
+                    if not pending:break
+                    ready,_=wait(pending,return_when=FIRST_COMPLETED)
                     for future in ready:
-                        try:
-                            result=future.result()
+                        task=pending.pop(future)
+                        try:groups=future.result()
                         except Exception as exc:
                             if error is None:error=exc
                         else:
-                            target.update(result)
-                            checkpoint(stage,len(target),len(plan.eligible))
-                    # Drain and save successful in-flight work even when another call failed/cancelled.
+                            state['reductions'][task]=groups
+                            checkpoint('reduce',len(state['reductions']),len(tasks))
                 if error is not None:raise error
             check_cancelled(is_cancelled)
-            return offset==len(batches)
-
-        # No taxonomy can be frozen until EVERY eligible file has contributed its summary.
-        remaining_summaries = [d for d in plan.eligible if d.alias not in state['summaries']]
-        if not process_batches(remaining_summaries,'summarize',state['summaries']):
-            return state
+            return offset==len(tasks)
         if not plan.eligible:
             state['topics'] = []
         elif not state['topics']:
             # Bounded context; coverage is exhaustive at every level, including minority subjects.
             while True:
                 check_cancelled(is_cancelled)
-                records, task, _ = catalog_frontier(plan, state)
-                if task is None:
-                    break
-                if calls >= max_calls:
-                    return state
-                # Requests contain derived summaries, not another copy of the source samples.
-                groups = _call(plan, (), key, is_cancelled, stage='reduce', records=records)
-                state['reductions'][task] = groups
-                calls += 1
-                checkpoint('reduce', len(state['reductions']), len(state['summaries']))
-            if calls >= max_calls:
-                return state
+                tasks,_=catalog_frontier(plan,state,collect=True)
+                if not tasks:break
+                if not process_reductions(tasks):return state
+            records,_,_=catalog_frontier(plan,state)
+            if calls>=max_calls:return state
             check_cancelled(is_cancelled)
             data = _call(plan, (), key, is_cancelled, stage='catalog', records=records)
             state['interests'], state['topics'] = data['interests'], data['topics']
             calls += 1
             checkpoint('catalog', len(state['topics']), len(state['topics']))
-        remaining = [d for d in plan.eligible if d.alias not in state['assignments']]
-        process_batches(remaining,'classify',state['assignments'])
+        if plan.eligible:
+            state['assignments']=assign_from_taxonomy(plan,state)
+            knowledge.verify_quotes(plan.eligible,[(alias,m['quote']) for alias,ms in state['assignments'].items() for m in ms])
+            checkpoint('classify',len(state['assignments']),len(plan.eligible))
         check_cancelled(is_cancelled)
         if knowledge.read_documents(plan.root, is_cancelled,excluded_dirs=plan.excluded_dirs) != plan.documents:
             raise ValueError('분석 중 영역의 저장 파일이 변경되었습니다. 다시 준비하세요.')

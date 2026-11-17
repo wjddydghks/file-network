@@ -136,7 +136,7 @@ class KnowledgeGraphView(QWidget):
         for i,node in enumerate(self.visible_nodes):
             self._node(node,*positions[node['id']],palette[i%len(palette)])
         if not self.visible_nodes:
-            text='전체 파일 요약 → 주제 통합 → 관심사 구성 → 파일 분류 순서로 진행합니다.\n분석·전송 확인에서 실행하거나 저장된 작업을 이어서 진행하세요.'
+            text='로컬 본문 준비 → 묶음별 주제 통합 → 관심사 구성 → 파일 연결 순서로 진행합니다.\n분석·전송 확인에서 실행하거나 저장된 작업을 이어서 진행하세요.'
             self.scene.addText(text)
         self.scene.setSceneRect(self.scene.itemsBoundingRect().adjusted(-35,-35,35,35))
         self.scene.blockSignals(False)

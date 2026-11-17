@@ -319,3 +319,46 @@ def test_cancelled_before_dispatch_never_calls_provider(context):
     with pytest.raises(OperationCancelled):
         service.ask_question(plan, plan.approval_id(), is_cancelled=lambda: True)
     assert not audit_rows()
+
+
+@pytest.mark.parametrize('status,code,expected',[
+    (401,'invalid_api_key','API 키'),
+    (429,'insufficient_quota','잔액'),
+    (429,'rate_limit_exceeded','속도 한도'),
+    (400,'invalid_json_schema','요청 형식'),
+    (400,'context_length_exceeded','입력 길이'),
+    (404,'model_not_found','모델'),
+    (503,'server_error','서버 오류'),
+])
+def test_http_errors_show_safe_status_and_known_code_without_raw_provider_message(monkeypatch,status,code,expected):
+    calls=[]
+    raw=json.dumps({'error':{'code':code,'message':'sk-private-key secret document text private-path'}}).encode()
+    class Response:
+        def __init__(self):self.status=status;self.body=raw
+        def read1(self,size):
+            chunk,self.body=self.body[:size],self.body[size:];return chunk
+    class Connection:
+        sock=None
+        def __init__(self,*args,**kwargs):pass
+        def request(self,*args,**kwargs):calls.append('request')
+        def getresponse(self):return Response()
+        def close(self):calls.append('closed')
+    monkeypatch.setattr(service.http.client,'HTTPSConnection',Connection)
+    with pytest.raises(service.AIServiceError) as caught:service._request({},'sk-private-key')
+    message=str(caught.value)
+    assert f'HTTP {status}' in message and code in message and expected in message
+    assert all(secret not in message for secret in ('sk-private-key','secret document','private-path'))
+    assert calls==['request','closed']
+
+
+def test_unknown_error_codes_and_oversize_error_bodies_are_not_exposed():
+    class Response:
+        def __init__(self):self.read=0
+        def read1(self,size):self.read+=size;return b'x'*size
+    reply=Response();message=str(service._http_error(400,reply))
+    assert reply.read==8192 and 'HTTP 400' in message
+    class SecretResponse:
+        body=json.dumps({'error':{'code':'sk-private-key','message':'secret-file-content'}}).encode()
+        def read1(self,size):chunk,self.body=self.body[:size],self.body[size:];return chunk
+    message=str(service._http_error(429,SecretResponse()))
+    assert 'sk-private-key' not in message and 'secret-file-content' not in message

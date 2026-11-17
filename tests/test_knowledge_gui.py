@@ -44,7 +44,7 @@ def test_only_core_actions_and_auto_whole_area_preparation(application,graph_win
     assert '새 전송 2개' in dialog.plan_summary.text()
     assert '외부 호출 없음' in dialog.status.text()
     assert not hasattr(dialog,'question') and not hasattr(dialog,'chunk')
-    assert dialog.plan.calls==3
+    assert dialog.plan.calls==1
 
 
 def test_node_edge_file_list_body_original_and_cache_reopen(application,graph_window,monkeypatch):
@@ -52,16 +52,16 @@ def test_node_edge_file_list_body_original_and_cache_reopen(application,graph_wi
     provider=Provider();monkeypatch.setattr(transport,'_request',provider)
     approve(dialog);dialog.run.click()
     wait_until(application,lambda:dialog.worker is None)
-    assert len(provider.calls)==3 and dialog.state['complete']
+    assert len(provider.calls)==1 and dialog.state['complete']
     assert dialog.tabs.currentIndex()==0
     dialog.graph.selector.setCurrentIndex(dialog.graph.selector.findData('C1'))
-    assert dialog.table.rowCount()==2
+    assert dialog.table.rowCount()==1
     assert dialog.graph.edges
     edge=dialog.graph.edges[0]
     dialog.graph.selector.setCurrentIndex(dialog.graph.selector.findData(edge['id']))
     assert dialog.table.rowCount()==len(edge['files'])
     assert set(d.file_id for d in dialog.page_documents)==set(edge['files'])
-    assert '공통 파일' in dialog.node_title.text()
+    assert '세부 주제' in dialog.node_title.text()
     assert dialog.reason.toPlainText()
     doc=dialog.selected_document();dialog.preview.click()
     wait_until(application,lambda:dialog.worker is None)
@@ -72,7 +72,7 @@ def test_node_edge_file_list_body_original_and_cache_reopen(application,graph_wi
     view.knowledge_button.click();second=view.knowledge_dialog
     wait_until(application,lambda:second.plan is not None and second.worker is None)
     assert second.plan.calls==0 and second.state['complete']
-    assert len(provider.calls)==3
+    assert len(provider.calls)==1
     assert not second.key.text() and not second.enabled.isChecked()
     second.close();wait_until(application,lambda:view.knowledge_dialog is None)
 
@@ -87,21 +87,17 @@ def test_file_change_on_prepare_invalidates_cache_and_uses_new_scope(application
     assert len(dialog.plan.documents)==5 and dialog.plan.calls>0
     assert dialog.state is None
     assert all(n['id'].startswith('status:') for n in dialog.graph.nodes)
-    assert len(provider.calls)==3
+    assert len(provider.calls)==1
     assert not dialog.approve.isChecked()
 
 
-def test_call_budget_pauses_then_resumes_without_catalog_replay(application,graph_window,monkeypatch):
+def test_single_global_call_completes_all_files_without_summary_or_classification_calls(application,graph_window,monkeypatch):
     _,_,dialog=graph_window
     provider=Provider();monkeypatch.setattr(transport,'_request',provider)
-    dialog.max_calls.setValue(1);approve(dialog);dialog.run.click()
-    wait_until(application,lambda:dialog.worker is None)
-    assert not dialog.state['complete'] and len(provider.calls)==1
-    assert '호출 상한' in dialog.status.text()
-    dialog.prepare.click();wait_until(application,lambda:dialog.plan is not None and dialog.worker is None)
-    assert dialog.plan.calls==2
+    assert dialog.max_calls.value()==1
     approve(dialog);dialog.run.click();wait_until(application,lambda:dialog.worker is None)
-    assert dialog.state['complete'] and len(provider.calls)==3
+    assert dialog.state['complete'] and len(provider.calls)==1
+    assert len(dialog.state['assignments'])==2
 
 
 @pytest.mark.parametrize('change',['interest','model','budget','key'])
@@ -110,7 +106,7 @@ def test_config_and_budget_revoke_approval(application,graph_window,change):
     approve(dialog)
     if change=='interest':dialog.interest.setText('일정')
     elif change=='model':dialog.model.setText('gpt-4.1')
-    elif change=='budget':dialog.max_calls.setValue(1)
+    elif change=='budget':dialog.max_calls.setValue(2)
     else:dialog.key.setText('different-fake-key')
     assert not dialog.approve.isChecked() and not dialog.run.isEnabled()
 

@@ -42,6 +42,39 @@ def _audit_finish(request_id, status):
         conn.execute('UPDATE ai_transmissions SET status=? WHERE request_id=?', (status, request_id))
 
 
+def _http_error(status, response):
+    # Provider messages can echo credentials or document text: only allow known identifiers.
+    allowed_codes={'invalid_api_key','insufficient_quota','rate_limit_exceeded','billing_hard_limit_reached',
+                   'invalid_json_schema','context_length_exceeded','model_not_found','unsupported_parameter',
+                   'invalid_request_error','server_error','model_access_denied'}
+    code=''
+    try:
+        body=bytearray()
+        while len(body)<8192:
+            chunk=response.read1(min(2048,8192-len(body)))
+            if not chunk:break
+            body.extend(chunk)
+        data=json.loads(body)
+        error=data.get('error',{}) if isinstance(data,dict) else {}
+        candidate=error.get('code') if isinstance(error,dict) else None
+        if isinstance(candidate,str) and candidate in allowed_codes:code=candidate
+    except (OSError,http.client.HTTPException,ValueError,TypeError,RecursionError):
+        pass
+    if status==429 and code in ('insufficient_quota','billing_hard_limit_reached'):
+        help_text='API 잔액·결제·프로젝트 지출 한도를 확인하세요. ChatGPT 구독 결제와 별개입니다.'
+    elif status==429:
+        help_text='API 요청/토큰 속도 한도에 도달했습니다. 잠시 뒤 다시 준비해 재개하세요.'
+    elif status==401:help_text='API 키가 유효한지, 키가 속한 프로젝트가 맞는지 확인하세요.'
+    elif status==403:help_text='이 프로젝트의 모델 사용 권한을 확인하세요.'
+    elif status==404:help_text='지정한 모델이 존재하며 계정에 허용되어 있는지 확인하세요.'
+    elif status==400 and code=='context_length_exceeded':help_text='모델의 입력 길이 제한을 초과했습니다. 더 작은 폴더 또는 긴 입력을 지원하는 모델을 사용하세요.'
+    elif status==400:help_text='요청 형식 또는 모델 옵션이 거부되었습니다. 표시된 오류 코드와 앱 버전을 확인하세요.'
+    elif status>=500:help_text='OpenAI 서버 오류입니다. 잠시 뒤 다시 준비해 재개하세요.'
+    elif 300<=status<400:help_text='예상하지 않은 리디렉션을 차단했습니다.'
+    else:help_text='API 서비스 상태와 프로젝트 접근 권한을 확인하세요.'
+    return AIServiceError(f'OpenAI HTTP {status}'+(f' ({code})' if code else '')+'. '+help_text+' 자동 재시도하지 않습니다.')
+
+
 def _request(payload, key):
     connection = http.client.HTTPSConnection('api.openai.com', timeout=30, context=ssl.create_default_context())
     deadline = time.monotonic() + 60
@@ -52,7 +85,7 @@ def _request(payload, key):
         response = connection.getresponse()
         # 리디렉션을 따라가지 않아 인증정보와 본문을 다른 호스트로 보내지 않는다.
         if response.status != 200:
-            raise AIServiceError('OpenAI API 요청 실패. 인증·한도·모델·서비스 상태를 확인하세요. 자동 재시도하지 않습니다.')
+            raise _http_error(response.status,response)
         chunks = []
         count = 0
         while True:
