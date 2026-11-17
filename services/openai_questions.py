@@ -77,12 +77,18 @@ def _http_error(status, response):
 
 def _request(payload, key):
     connection = http.client.HTTPSConnection('api.openai.com', timeout=30, context=ssl.create_default_context())
-    deadline = time.monotonic() + 60
+    deadline = time.monotonic() + 180
+    phase = '연결·전송'
     try:
         connection.request('POST', '/v1/chat/completions',
             body=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
             headers={'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'})
+        # Large grouped inputs need more than the old 30-second first-byte window.
+        phase = '응답 대기'
+        if connection.sock is not None:
+            connection.sock.settimeout(min(120,max(1,deadline-time.monotonic())))
         response = connection.getresponse()
+        phase = '응답 수신'
         # 리디렉션을 따라가지 않아 인증정보와 본문을 다른 호스트로 보내지 않는다.
         if response.status != 200:
             raise _http_error(response.status,response)
@@ -101,9 +107,22 @@ def _request(payload, key):
             count += len(chunk)
             if count > MAX_RESPONSE_BYTES:
                 raise AIServiceError('OpenAI 응답 크기 제한을 초과했습니다.')
+        phase = 'JSON 해석'
         return json.loads(b''.join(chunks))
-    except (OSError, socket.timeout, http.client.HTTPException, ValueError, RecursionError):
-        raise AIServiceError('OpenAI 연결 또는 응답 처리에 실패했습니다. 전송되었을 수 있으며 자동 재시도하지 않습니다.') from None
+    except socket.gaierror:
+        raise AIServiceError('OpenAI DNS 오류: 서버 주소를 확인하지 못했습니다. 인터넷·DNS 설정을 확인하세요. 자동 재시도하지 않습니다.') from None
+    except ssl.SSLError:
+        raise AIServiceError('OpenAI TLS 오류: 보안 연결을 확인하지 못했습니다. 시스템 시간·인증서·회사 프록시 설정을 확인하세요. 자동 재시도하지 않습니다.') from None
+    except (TimeoutError,socket.timeout):
+        raise AIServiceError(f'OpenAI 시간 초과 ({phase}). 큰 요청의 첫 응답은 최대 120초, 전체 요청은 최대 180초 기다립니다. 전송·과금되었을 수 있으며 자동 재시도하지 않습니다.') from None
+    except (ConnectionError,http.client.RemoteDisconnected):
+        raise AIServiceError(f'OpenAI 연결 끊김 ({phase}). 인터넷·VPN·프록시 상태를 확인하세요. 전송·과금되었을 수 있으며 자동 재시도하지 않습니다.') from None
+    except http.client.HTTPException:
+        raise AIServiceError(f'OpenAI HTTP 통신 오류 ({phase}). 응답이 정상적으로 끝나지 않았습니다. 전송·과금되었을 수 있으며 자동 재시도하지 않습니다.') from None
+    except OSError:
+        raise AIServiceError(f'OpenAI 네트워크 오류 ({phase}). 인터넷·VPN·프록시 상태를 확인하세요. 전송·과금되었을 수 있으며 자동 재시도하지 않습니다.') from None
+    except (ValueError,RecursionError):
+        raise AIServiceError(f'OpenAI 응답 형식 오류 ({phase}): 정상 JSON으로 해석하지 못했습니다. 전송·과금되었을 수 있으며 자동 재시도하지 않습니다.') from None
     finally:
         connection.close()
 

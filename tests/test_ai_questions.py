@@ -362,3 +362,37 @@ def test_unknown_error_codes_and_oversize_error_bodies_are_not_exposed():
         def read1(self,size):chunk,self.body=self.body[:size],self.body[size:];return chunk
     message=str(service._http_error(429,SecretResponse()))
     assert 'sk-private-key' not in message and 'secret-file-content' not in message
+
+
+@pytest.mark.parametrize('mode,expected',[
+    ('first_byte_timeout','시간 초과 (응답 대기)'),
+    ('dns','DNS 오류'),('tls','TLS 오류'),('disconnected','연결 끊김'),
+    ('protocol','HTTP 통신 오류'),('invalid_json','JSON 해석'),
+])
+def test_transport_distinguishes_failure_stage_without_secret_details(monkeypatch,mode,expected):
+    import socket,ssl,http.client
+    calls=[]
+    class Sock:
+        def settimeout(self,value):calls.append(('timeout',value))
+    class Response:
+        status=200
+        body=b'private document content'
+        def read1(self,size):chunk,self.body=self.body[:size],self.body[size:];return chunk
+    class Connection:
+        sock=Sock()
+        def __init__(self,*args,**kwargs):pass
+        def request(self,*args,**kwargs):
+            if mode=='dns':raise socket.gaierror('private-key')
+            if mode=='tls':raise ssl.SSLError('private-key')
+        def getresponse(self):
+            if mode=='first_byte_timeout':raise TimeoutError('private-key')
+            if mode=='disconnected':raise http.client.RemoteDisconnected('private-key')
+            if mode=='protocol':raise http.client.BadStatusLine('private-key')
+            return Response()
+        def close(self):calls.append('closed')
+    monkeypatch.setattr(service.http.client,'HTTPSConnection',Connection)
+    with pytest.raises(service.AIServiceError) as caught:service._request({},'private-key')
+    message=str(caught.value)
+    assert expected in message and 'private' not in message
+    assert calls[-1]=='closed'
+    if mode=='first_byte_timeout':assert ('timeout',120) in calls
