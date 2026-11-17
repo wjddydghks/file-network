@@ -65,8 +65,10 @@ class GraphCanvas(QGraphicsView):
 
 class RelatedGraphDialog(QDialog):
     fileActivated = Signal(object, str)
+    recenterRequested = Signal(object)
+    backRequested = Signal()
 
-    def __init__(self, snapshot, parent=None):
+    def __init__(self, snapshot, parent=None, *, can_go_back=False, scope_label='', notice=''):
         super().__init__(parent)
         self.setWindowTitle('관련 문서 그래프 — 공유 키워드 근거')
         self.setWindowModality(Qt.WindowModality.WindowModal)
@@ -104,6 +106,24 @@ class RelatedGraphDialog(QDialog):
         note = QLabel(f"기준 문서와 상위 후보 {len(candidates)}/{len(snapshot['results'])}개를 표시합니다. 선은 공유 키워드 근거이며 의미 유사성·실제 관계를 확정하지 않습니다. 후보끼리의 관계는 그리지 않습니다.")
         note.setWordWrap(True)
         note.setTextFormat(Qt.TextFormat.PlainText)
+        self.notice = QLabel(notice)
+        self.notice.setTextFormat(Qt.TextFormat.PlainText)
+        self.notice.setWordWrap(True)
+        self.notice.setVisible(bool(notice))
+        self.back_button = QPushButton('이전 그래프')
+        self.back_button.setEnabled(can_go_back)
+        self.back_button.setAutoDefault(False)
+        self.back_button.clicked.connect(self._go_back)
+        self.recenter_button = QPushButton('선택 문서 중심으로')
+        self.recenter_button.setAutoDefault(False)
+        self.recenter_button.clicked.connect(self._recenter)
+        scope = QLabel('조회 범위: ' + scope_label if scope_label else '이전 탐색은 저장된 조회 결과를 복원합니다.')
+        scope.setTextFormat(Qt.TextFormat.PlainText)
+        scope.setWordWrap(True)
+        navigation = QHBoxLayout()
+        navigation.addWidget(self.back_button)
+        navigation.addWidget(self.recenter_button)
+        navigation.addWidget(scope, 1)
         controls = QHBoxLayout()
         controls.addWidget(QLabel('문서 선택'))
         controls.addWidget(self.selector, 1)
@@ -132,6 +152,8 @@ class RelatedGraphDialog(QDialog):
         actions.addWidget(close)
         layout = QVBoxLayout(self)
         layout.addWidget(note)
+        layout.addWidget(self.notice)
+        layout.addLayout(navigation)
         layout.addLayout(controls)
         layout.addWidget(self.canvas, 1)
         layout.addWidget(self.details)
@@ -158,6 +180,7 @@ class RelatedGraphDialog(QDialog):
         self.selector.setCurrentIndex(index)
         self.selector.blockSignals(False)
         is_source = row['file_id'] == self.source['file_id']
+        self.recenter_button.setEnabled(not is_source)
         keywords = self._keywords if is_source else row['shared_keywords']
         label = '선정 키워드' if is_source else '공유 키워드'
         self.details.setPlainText(f"{row['name']}\n{row['path']}\n분석 시각: {row['analyzed_at']}\n{label}: {', '.join(keywords) or '없음'}\n\n{row.get('snippet', '')}\n\n마지막 분석 결과입니다. 원본이 변경되었을 수 있습니다.")
@@ -170,6 +193,19 @@ class RelatedGraphDialog(QDialog):
         row = self.rows[self.selector.currentData()]
         self.fileActivated.emit(row['file_id'], row['analyzed_at'])
         self.accept()
+
+    def _recenter(self):
+        file_id = self.selector.currentData()
+        if file_id == self.source['file_id']:
+            return
+        self.recenterRequested.emit(file_id)
+        self.accept()
+
+    def _go_back(self):
+        if not self.back_button.isEnabled():
+            return
+        self.accept()
+        self.backRequested.emit()
 
     def showEvent(self, event):
         super().showEvent(event)

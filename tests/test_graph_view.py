@@ -98,3 +98,26 @@ def test_double_click_node_emits_its_revision(application):
     QTest.mouseDClick(graph.canvas.viewport(), Qt.MouseButton.LeftButton, pos=point)
     assert emitted == [(1, 'revision-0')]
     application.processEvents()
+
+
+def test_navigation_signals_keep_large_ids_and_source_is_not_recentered(application):
+    data = snapshot(1)
+    data['results'][0]['file_id'] = 2**41
+    graph = RelatedGraphDialog(data, can_go_back=True, scope_label='C:/Documents')
+    graph.show()
+    application.processEvents()
+    assert not graph.recenter_button.isEnabled()
+    emitted = []
+    graph.recenterRequested.connect(emitted.append)
+    graph.selector.setCurrentIndex(1)
+    assert graph.recenter_button.isEnabled()
+    graph.recenter_button.click()
+    assert emitted == [2**41]
+    application.processEvents()
+    restored = RelatedGraphDialog(data, can_go_back=True)
+    restored.show()
+    back = []
+    restored.backRequested.connect(lambda: back.append(True))
+    restored.back_button.click()
+    assert back == [True]
+    application.processEvents()

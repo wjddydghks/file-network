@@ -89,6 +89,14 @@ def run_smoke():
                 app.processEvents()
                 if view.graph_dialog is None or len(view.graph_dialog.nodes) != 2 or len(view.graph_dialog.edges) != 1:
                     raise RuntimeError('패키지 관계 그래프 검증 실패')
+                view.graph_dialog.selector.setCurrentIndex(1)
+                view.graph_dialog.recenter_button.click()
+                wait_for(lambda: view.worker is None)
+                if view.graph_dialog is None or view.graph_dialog.source['name'] != 'package-pages.pdf' or not view.graph_dialog.back_button.isEnabled():
+                    raise RuntimeError('패키지 그래프 중심 변경 검증 실패')
+                view.graph_dialog.back_button.click()
+                if view.graph_dialog is None or view.graph_dialog.source['name'] != 'package-note.txt':
+                    raise RuntimeError('패키지 이전 그래프 복원 검증 실패')
                 view.graph_dialog.close()
                 app.processEvents()
                 view.query.setText('packagepdfkeyword')
@@ -152,6 +160,6 @@ def run_smoke():
     return {
         'success': True, 'frozen': frozen, 'platform': platform.platform(),
         'database_outside_bundle': outside_bundle, 'gui_platform': app.platformName(),
-        'gui': {'analysis': True, 'search': True, 'preview': True, 'citations': True, 'office_citations': True, 'matching_citation': True, 'related_documents': True, 'relation_graph': True, 'exclusions': True, 'settings_restore': True, 'writable_data_directory': True},
+        'gui': {'analysis': True, 'search': True, 'preview': True, 'citations': True, 'office_citations': True, 'matching_citation': True, 'related_documents': True, 'relation_graph': True, 'graph_navigation': True, 'exclusions': True, 'settings_restore': True, 'writable_data_directory': True},
         'benchmark': benchmark,
     }
