@@ -39,7 +39,7 @@ jobs:
           pip install -r requirements-gui.txt
 
       - name: Check Python syntax
-        run: python -m compileall -q app core database tests benchmarks scripts desktop.py
+        run: python -m compileall -q app core database services tests benchmarks scripts desktop.py
 
       - name: Run tests
         run: python -m pytest -v
