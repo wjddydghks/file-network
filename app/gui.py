@@ -5,7 +5,7 @@ from threading import Event
 
 try:
     from PySide6.QtCore import Qt, QThread, QUrl, Signal, Slot
-    from PySide6.QtGui import QDesktopServices
+    from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut, QTextCursor, QTextDocument
     from PySide6.QtWidgets import (
         QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QHBoxLayout, QHeaderView, QLabel,
         QLineEdit, QMainWindow, QPlainTextEdit, QProgressBar, QPushButton,
@@ -24,7 +24,7 @@ from core.operations import check_cancelled
 from database.content_search import search_content
 from database.file_search import search_filename
 from database.unified_search import search_all
-from database.file_contents import get_content_preview, list_analysis_results
+from database.file_contents import MAX_PREVIEW_CHARS, get_content_preview, list_analysis_results
 
 MATCH_SOURCE_LABELS = {"content": "본문", "name": "파일명"}
 
@@ -36,27 +36,150 @@ class ContentPreviewDialog(QDialog):
         self.setWindowModality(Qt.WindowModality.WindowModal)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.resize(850, 650)
-        note = QLabel("마지막 분석 시점에 저장된 텍스트입니다. 최신 원본과 다를 수 있습니다.")
+        self.worker = None
+        self._closing = False
+        self._result = result
+        self._available = True
+        note = QLabel("마지막 분석 시점의 텍스트입니다. 최신 원본과 다를 수 있습니다. 구간은 글자 수 기준이며 원본 페이지가 아닙니다.")
         note.setWordWrap(True)
-        self.details = QPlainTextEdit(format_analysis_detail(result))
+        self.details = QPlainTextEdit()
         self.details.setReadOnly(True)
         self.details.setMaximumHeight(150)
-        count = f"저장된 본문 {result['total_chars']:,}자"
-        if result['truncated']:
-            count += f" — 앞 {len(result['text']):,}자만 표시합니다. 나머지는 원본 파일에서 확인하세요."
-        self.summary = QLabel(count)
+        self.summary = QLabel()
         self.summary.setWordWrap(True)
+        self.previous = QPushButton("이전 구간")
+        self.previous.clicked.connect(lambda: self.load_segment(self._result['segment'] - 1))
+        self.next = QPushButton("다음 구간")
+        self.next.clicked.connect(lambda: self.load_segment(self._result['segment'] + 1))
+        self.refresh = QPushButton("처음부터 새로 읽기")
+        self.refresh.clicked.connect(lambda: self.load_segment(0, refresh=True))
+        navigation = QHBoxLayout()
+        for widget in (self.previous, self.next, self.refresh):
+            navigation.addWidget(widget)
+        self.find_query = QLineEdit()
+        self.find_query.setPlaceholderText("현재 표시 구간에서 찾기")
+        self.find_query.returnPressed.connect(self.find_next)
+        self.find_previous = QPushButton("이전 일치")
+        self.find_previous.clicked.connect(lambda: self.find_next(backward=True))
+        self.find_forward = QPushButton("다음 일치")
+        self.find_forward.clicked.connect(self.find_next)
+        for button in (self.previous, self.next, self.refresh, self.find_previous, self.find_forward):
+            button.setAutoDefault(False)
+        find_row = QHBoxLayout()
+        for widget in (self.find_query, self.find_previous, self.find_forward):
+            find_row.addWidget(widget)
+        self.find_shortcut = QShortcut(QKeySequence.StandardKey.Find, self)
+        self.find_shortcut.activated.connect(self.find_query.setFocus)
         self.body = QPlainTextEdit()
         self.body.setReadOnly(True)
-        self.body.setPlainText(result['text'])
         self.body.setPlaceholderText("저장된 본문이 없습니다. 위의 분석 상태와 사유를 확인하세요.")
+        self.status = QLabel()
+        self.status.setTextFormat(Qt.TextFormat.PlainText)
+        self.status.setWordWrap(True)
         close = QPushButton("닫기")
+        close.setAutoDefault(False)
         close.clicked.connect(self.close)
         layout = QVBoxLayout(self)
         for widget in (note, self.details, self.summary):
             layout.addWidget(widget)
+        layout.addLayout(navigation)
+        layout.addLayout(find_row)
         layout.addWidget(self.body, 1)
+        layout.addWidget(self.status)
         layout.addWidget(close)
+        self._render(result)
+
+    def _render(self, result):
+        self._result = result
+        self._available = True
+        self.details.setPlainText(format_analysis_detail(result))
+        self.body.setPlainText(result['text'])
+        total = result['total_chars']
+        start = result['segment'] * MAX_PREVIEW_CHARS + 1 if total else 0
+        end = start + len(result['text']) - 1 if total else 0
+        self.summary.setText(f"저장된 본문 {total:,}자 — 구간 {result['segment'] + 1:,}/{result['segment_count']:,} ({start:,}–{end:,}자)")
+        self.status.setText("현재 구간 안에서 찾습니다. 구간 경계를 가로지르는 단어는 찾지 않습니다.")
+        self._set_busy(False)
+
+    def _set_busy(self, busy):
+        self.previous.setEnabled(not busy and self._available and self._result['segment'] > 0)
+        self.next.setEnabled(not busy and self._available and self._result['segment'] + 1 < self._result['segment_count'])
+        self.refresh.setEnabled(not busy)
+        for widget in (self.find_query, self.find_previous, self.find_forward, self.body):
+            widget.setEnabled(not busy and self._available)
+
+    def load_segment(self, segment, refresh=False):
+        if self.worker is not None:
+            return
+        file_id = self._result['file_id']
+        revision = None if refresh else self._result['analyzed_at']
+        self._set_busy(True)
+        self.status.setText("저장된 본문 구간 조회 중…")
+        self._outcome = ("cancelled", None)
+        self.worker = TaskThread(lambda cancelled, progress: get_content_preview(file_id, segment=segment, analyzed_at=revision), self)
+        self.worker.completed.connect(self._completed)
+        self.worker.failed.connect(self._failed)
+        self.worker.finished.connect(self._finished)
+        self.worker.start()
+
+    @Slot(object)
+    def _completed(self, result):
+        self._outcome = ("completed", result)
+
+    @Slot(str)
+    def _failed(self, message):
+        self._outcome = ("failed", message)
+
+    @Slot()
+    def _finished(self):
+        worker = self.worker
+        self.worker = None
+        worker.deleteLater()
+        if self._closing:
+            self.close()
+            return
+        outcome, result = self._outcome
+        if outcome == "completed" and result is not None:
+            self._render(result)
+        else:
+            self._available = False
+            self.body.clear()
+            self.summary.clear()
+            self.status.setText(result if outcome == "failed" else "저장된 본문을 찾을 수 없습니다. 처음부터 새로 읽거나 스캔·분석을 실행하세요.")
+            self._set_busy(False)
+
+    @Slot()
+    def find_next(self, backward=False):
+        if self.worker is not None or not self._available:
+            return
+        query = self.find_query.text()
+        if not query:
+            self.status.setText("찾을 단어를 입력하세요.")
+            return
+        flags = QTextDocument.FindFlag.FindBackward if backward else QTextDocument.FindFlag(0)
+        found = self.body.find(query, flags)
+        if not found:
+            cursor = self.body.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.End if backward else QTextCursor.MoveOperation.Start)
+            self.body.setTextCursor(cursor)
+            found = self.body.find(query, flags)
+        self.status.setText("현재 구간에서 일치하는 단어를 선택했습니다." if found else "현재 구간에 일치하는 단어가 없습니다.")
+
+    def closeEvent(self, event):
+        if self.worker is not None:
+            self._closing = True
+            self.worker.cancel_event.set()
+            self.status.setText("구간 조회가 끝나면 닫습니다.")
+            event.ignore()
+        else:
+            super().closeEvent(event)
+
+    def reject(self):
+        # Escape도 실행 중인 구간 조회의 종료를 기다린다.
+        if self.worker is not None:
+            self.close()
+        else:
+            super().reject()
 
 
 class TaskThread(QThread):
@@ -400,6 +523,8 @@ class MainWindow(QMainWindow):
     @Slot()
     def _clear_content_dialog(self):
         self.content_dialog = None
+        if self._closing and self.worker is None:
+            self.close()
 
     @Slot()
     def start_content_preview(self):
@@ -429,6 +554,10 @@ class MainWindow(QMainWindow):
         if self.worker is not None:
             self._closing = True
             self.cancel_task()
+            event.ignore()
+        elif self.content_dialog is not None and self.content_dialog.worker is not None:
+            self._closing = True
+            self.content_dialog.close()
             event.ignore()
         else:
             event.accept()
