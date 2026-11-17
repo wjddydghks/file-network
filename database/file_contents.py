@@ -4,6 +4,7 @@ from os import sep
 from pathlib import Path
 
 from database import db
+from core.citations import build_chunks
 
 
 def initialize_file_contents():
@@ -34,6 +35,22 @@ def initialize_file_contents():
                     reason = CASE WHEN NEW.scan_status = 'DELETED'
                                   THEN 'FILE_DELETED' ELSE 'FILE_CHANGED' END
                 WHERE file_id = NEW.id;
+            END
+        """)
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS document_chunks (
+                file_id INTEGER NOT NULL REFERENCES file_contents(file_id) ON DELETE CASCADE,
+                chunk_index INTEGER NOT NULL CHECK (chunk_index >= 0),
+                start_char INTEGER NOT NULL CHECK (start_char >= 0),
+                end_char INTEGER NOT NULL CHECK (end_char > start_char),
+                page INTEGER CHECK (page > 0),
+                PRIMARY KEY (file_id, chunk_index)
+            )
+        """)
+        connection.execute("""
+            CREATE TRIGGER IF NOT EXISTS invalidate_document_chunks
+            AFTER UPDATE ON file_contents BEGIN
+                DELETE FROM document_chunks WHERE file_id = NEW.file_id;
             END
         """)
 
@@ -80,6 +97,7 @@ def get_content_states(file_ids):
 
 
 def save_file_content(file_id, result, source_fingerprint):
+    chunks = build_chunks(result)
     with db.get_connection() as connection:
         connection.execute("""
             INSERT INTO file_contents (
@@ -94,6 +112,10 @@ def save_file_content(file_id, result, source_fingerprint):
             file_id, result.status, result.text, result.reason, result.error,
             source_fingerprint, datetime.now(timezone.utc).isoformat(),
         ))
+        connection.executemany("""
+            INSERT INTO document_chunks (file_id, chunk_index, start_char, end_char, page)
+            VALUES (?, ?, ?, ?, ?)
+        """, [(file_id, *chunk) for chunk in chunks])
 
 
 ANALYSIS_STATUSES = ("EXTRACTED", "SKIPPED", "FAILED", "STALE", "PENDING")

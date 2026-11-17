@@ -12,7 +12,7 @@ from core.scanner.scanner import classify_file
 from database import db, file_contents
 
 
-EXTRACTOR_VERSION = 4
+EXTRACTOR_VERSION = 5
 
 
 def source_fingerprint(path, max_bytes, text_encoding="auto"):

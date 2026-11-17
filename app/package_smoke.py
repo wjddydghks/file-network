@@ -15,6 +15,7 @@ def run_smoke():
     from app.storage import default_database_path, is_frozen
     from benchmarks.content_analysis import run_benchmark
     from database import db
+    import pymupdf
 
     frozen = is_frozen()
     outside_bundle = not frozen or not default_database_path().resolve().is_relative_to(Path(sys.executable).resolve().parent)
@@ -39,6 +40,12 @@ def run_smoke():
         root = base / 'scan'
         root.mkdir()
         (root / 'package-note.txt').write_bytes('한글 packagekeyword'.encode('utf-8'))
+        with pymupdf.open() as document:
+            for text in ('', 'packagepdfkeyword page two', '', 'page four'):
+                page = document.new_page()
+                if text:
+                    page.insert_text((72, 72), text)
+            document.save(root / 'package-pages.pdf')
         data_path = base / 'user-data' / 'file_network.db'
         if not frozen:
             data_path.parent.mkdir()
@@ -50,7 +57,7 @@ def run_smoke():
                 view.show()
                 view.start_analysis()
                 wait_for(lambda: view.worker is None)
-                if view._outcome[0] != 'completed' or view._outcome[1]['extracted'] != 1:
+                if view._outcome[0] != 'completed' or view._outcome[1]['extracted'] != 2:
                     raise RuntimeError(f'패키지 GUI 분석 실패: {view._outcome}')
                 view.query.setText('packagekeyword')
                 view.start_search()
@@ -62,10 +69,31 @@ def run_smoke():
                 if view.content_dialog is None or 'packagekeyword' not in view.content_dialog.body.toPlainText():
                     raise RuntimeError('패키지 본문 미리보기 실패')
                 view.content_dialog.close()
+                view.query.setText('packagepdfkeyword')
+                view.start_search()
+                wait_for(lambda: view.worker is None)
+                if len(view._results) != 1:
+                    raise RuntimeError('패키지 PDF 검색 실패')
+                view.start_content_preview()
+                wait_for(lambda: view.worker is None)
+                dialog = view.content_dialog
+                if dialog is None:
+                    raise RuntimeError('패키지 PDF 미리보기 실패')
+                dialog.mode.setCurrentIndex(dialog.mode.findData('chunks'))
+                wait_for(lambda: dialog.worker is None)
+                if dialog._result.get('page') != 2 or 'packagepdfkeyword' not in dialog.body.toPlainText():
+                    raise RuntimeError('패키지 PDF 인용 페이지 검증 실패')
+                dialog.next.click()
+                wait_for(lambda: dialog.worker is None)
+                if dialog._result.get('page') != 4 or dialog.body.toPlainText() != 'page four':
+                    raise RuntimeError('패키지 PDF 인용 탐색 실패')
+                dialog.close()
                 view.close()
             finally:
                 view.close()
                 wait_for(lambda: view.worker is None)
+                wait_for(lambda: view.content_dialog is None or view.content_dialog.worker is None)
+                view.close()
                 view.deleteLater()
                 app.processEvents()
             restored = MainWindow(settings_path=base / 'settings.json')
@@ -83,6 +111,6 @@ def run_smoke():
     return {
         'success': True, 'frozen': frozen, 'platform': platform.platform(),
         'database_outside_bundle': outside_bundle, 'gui_platform': app.platformName(),
-        'gui': {'analysis': True, 'search': True, 'preview': True, 'settings_restore': True, 'writable_data_directory': True},
+        'gui': {'analysis': True, 'search': True, 'preview': True, 'citations': True, 'settings_restore': True, 'writable_data_directory': True},
         'benchmark': benchmark,
     }
