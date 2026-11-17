@@ -413,6 +413,8 @@ python -m benchmarks.content_analysis --dataset mixed --files 600 --output bench
 
 JSON에는 형식별 개수·입력 크기·검증 결과가 추가되며 `--output`으로 UTF-8 보고서를 저장할 수 있습니다. 보고서는 집계 결과만 포함하고 원문·임시 경로를 넣지 않습니다. Windows CI는 회귀 테스트 후 `mixed` 600개를 추가 실행하고 **mixed-document-benchmark-Windows** artifact에 JSON만 7일간 보관합니다. Actions 실행의 Windows 작업 로그와 artifact에서 실제 runner 환경·결과를 확인할 수 있습니다. 시간 임계값으로 성공/실패를 정하지 않으며 실제 파일 처리 결과로 검증합니다.
 
+내부 DB 연결은 `with db.get_connection()` 범위를 벗어날 때 커밋/롤백 후 닫힙니다. 직접 연결을 얻는 코드는 기존처럼 명시적으로 `close()`합니다. 이 처리로 예외 traceback이 남아도 Windows에서 임시 DB 파일 핸들이 유지되지 않도록 합니다. 임시 데이터 경로도 생성 전에 정규화해 macOS 경로 별칭과 Windows 짧은 경로를 일관되게 검증합니다.
+
 캐시 상태는 본문을 읽지 않고 최대 500개씩 조회합니다. 기존 파일별 결과 저장·실패 재시도·취소 시 완료된 결과 보존은 유지하며 캐시 형식이나 추출기 버전은 바꾸지 않습니다.
 
 개발 Linux 환경(Python 3.12.14, SQLite 3.53.1)의 짧은 텍스트 표본 측정:
