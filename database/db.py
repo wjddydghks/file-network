@@ -1,4 +1,5 @@
 import sqlite3
+import os
 from os import sep
 from pathlib import Path
 from app.storage import default_database_path, is_frozen
@@ -6,6 +7,20 @@ from core.filenames import fold_filename
 
 
 DB_PATH = default_database_path()
+
+
+def database_artifact_paths(root=None):
+    """앱이 사용 중인 DB와 SQLite 보조 파일의 정확한 경로만 반환한다."""
+    if str(DB_PATH) == ':memory:':
+        return ()
+    lexical = Path(os.path.abspath(Path(DB_PATH).expanduser()))
+    bases = {lexical, lexical.resolve()}
+    paths = {Path(str(base) + suffix) for base in bases
+             for suffix in ('', '-journal', '-wal', '-shm')}
+    if root is not None:
+        root = Path(root).expanduser().resolve()
+        paths = {path for path in paths if path.is_relative_to(root)}
+    return tuple(str(path) for path in sorted(paths))
 
 
 class _ClosingConnection(sqlite3.Connection):

@@ -1,4 +1,4 @@
-"""폴더 이름 전체 일치 기반 제외. 원본 경로를 추가로 탐색하지 않는다."""
+"""폴더 이름·정확한 파일 경로 기반 제외. 원본 경로를 추가로 탐색하지 않는다."""
 import os
 from pathlib import Path
 
@@ -22,12 +22,15 @@ def parse_excluded_dirs(text):
 
 
 class ExcludedDirectories:
-    def __init__(self, root, names):
+    def __init__(self, root, names, files=()):
         self.root = Path(root)
         self.names = {os.path.normcase(name) for name in names}
+        self.files = {os.path.normcase(os.path.abspath(path)) for path in files}
 
     def contains_file(self, path):
-        """명시한 루트 자체는 제외하지 않고 루트 아래 부모 폴더들만 비교한다."""
+        """파일 경로를 먼저 확인하고 폴더명은 명시한 루트 아래에서만 비교한다."""
+        if self.files and os.path.normcase(os.path.abspath(path)) in self.files:
+            return True
         if not self.names:
             return False
         try:

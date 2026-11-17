@@ -87,7 +87,8 @@ def get_identity(file):
 def run_incremental_scan(root_path, is_cancelled=None, progress_callback=None, excluded_dirs=()):
     excluded_dirs = validate_excluded_dirs(excluded_dirs)
     root = Path(root_path).expanduser().resolve()
-    exclusions = ExcludedDirectories(root, excluded_dirs)
+    internal_files = db.database_artifact_paths(root)
+    exclusions = ExcludedDirectories(root, excluded_dirs, files=internal_files)
 
     if not root.exists():
         raise FileNotFoundError(f"경로가 존재하지 않습니다: {root}")
@@ -118,6 +119,8 @@ def run_incremental_scan(root_path, is_cancelled=None, progress_callback=None, e
         scan_options = {"batch_size": 500, "scan_stats": scan_stats}
         if excluded_dirs:
             scan_options["excluded_dirs"] = excluded_dirs
+        if internal_files:
+            scan_options['excluded_files'] = internal_files
         if is_cancelled is not None:
             scan_options["is_cancelled"] = is_cancelled
         for batch in scan_directory(
@@ -288,6 +291,7 @@ def run_incremental_scan(root_path, is_cancelled=None, progress_callback=None, e
     print(f"이동 파일: {moved_count:,}개")
     print(f"접근 오류: {scan_stats['error_count']:,}건")
     print(f"제외한 폴더: {scan_stats.get('excluded_directory_count', 0):,}개")
+    print(f"제외한 앱 내부 파일: {scan_stats.get('excluded_file_count', 0):,}개")
     print(f"삭제 파일: {deleted_count:,}개")
     print(f"스캔 완전성: {'완료' if scan_complete else '불완전'}")
     print(f"DB 활성 파일: {db.get_active_file_count():,}개")

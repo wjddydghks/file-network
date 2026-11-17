@@ -135,6 +135,13 @@ def run_benchmark(file_count=1000, dataset="text"):
                     raise RuntimeError(f'변경 후 캐시 재사용 검증 실패: {final_counts}')
                 output['post_change_cached'] = {'seconds': round(perf_counter() - started, 6), 'connections': connection_count, 'counts': final_counts}
 
+            with db.get_connection() as connection:
+                output['stored_text_chars'] = connection.execute(
+                    'SELECT COALESCE(SUM(length(text)),0) FROM file_contents'
+                ).fetchone()[0]
+                output['citation_chunks'] = connection.execute('SELECT COUNT(*) FROM document_chunks').fetchone()[0]
+            output['database_bytes'] = Path(db.DB_PATH).stat().st_size
+
     return output
 
 

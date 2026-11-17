@@ -55,7 +55,7 @@ def run_smoke():
                 if text:
                     page.insert_text((72, 72), text)
             document.save(root / 'package-pages.pdf')
-        data_path = base / 'user-data' / 'file_network.db'
+        data_path = root / 'app-state' / 'file_network.db'
         if not frozen:
             data_path.parent.mkdir()
         with patch.object(db, 'DB_PATH', data_path):
@@ -70,7 +70,7 @@ def run_smoke():
                 if view._outcome[0] != 'completed' or view._outcome[1]['extracted'] != 3:
                     raise RuntimeError(f'패키지 GUI 분석 실패: {view._outcome}')
                 if len(db.get_active_files_under(root)) != 3:
-                    raise RuntimeError('패키지 제외 폴더가 스캔되었습니다.')
+                    raise RuntimeError('패키지 제외 폴더 또는 앱 DB가 스캔되었습니다.')
                 view.query.setText('packagekeyword')
                 view.start_search()
                 wait_for(lambda: view.worker is None)
@@ -160,6 +160,6 @@ def run_smoke():
     return {
         'success': True, 'frozen': frozen, 'platform': platform.platform(),
         'database_outside_bundle': outside_bundle, 'gui_platform': app.platformName(),
-        'gui': {'analysis': True, 'search': True, 'preview': True, 'citations': True, 'office_citations': True, 'matching_citation': True, 'related_documents': True, 'relation_graph': True, 'graph_navigation': True, 'exclusions': True, 'settings_restore': True, 'writable_data_directory': True},
+        'gui': {'analysis': True, 'search': True, 'preview': True, 'citations': True, 'office_citations': True, 'matching_citation': True, 'related_documents': True, 'relation_graph': True, 'graph_navigation': True, 'exclusions': True, 'settings_restore': True, 'writable_data_directory': True, 'internal_db_exclusion': True},
         'benchmark': benchmark,
     }

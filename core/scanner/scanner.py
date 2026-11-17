@@ -62,8 +62,9 @@ def classify_file(extension):
     return "OTHER"
 
 
-def scan_directory(root_path, batch_size=500, scan_stats=None, is_cancelled=None, excluded_dirs=()):
+def scan_directory(root_path, batch_size=500, scan_stats=None, is_cancelled=None, excluded_dirs=(), excluded_files=()):
     excluded = {os.path.normcase(name) for name in validate_excluded_dirs(excluded_dirs)}
+    excluded_paths = {os.path.normcase(os.path.abspath(path)) for path in excluded_files}
     root = Path(root_path).expanduser().resolve()
 
     if not root.exists():
@@ -79,6 +80,7 @@ def scan_directory(root_path, batch_size=500, scan_stats=None, is_cancelled=None
     scan_stats["directory_error_count"] = 0
     scan_stats["file_error_count"] = 0
     scan_stats["excluded_directory_count"] = 0
+    scan_stats["excluded_file_count"] = 0
 
     stack = [str(root)]
     batch = []
@@ -92,6 +94,9 @@ def scan_directory(root_path, batch_size=500, scan_stats=None, is_cancelled=None
             with os.scandir(current_path) as entries:
                 for entry in entries:
                     check_cancelled(is_cancelled)
+                    if excluded_paths and os.path.normcase(os.path.abspath(entry.path)) in excluded_paths:
+                        scan_stats["excluded_file_count"] += 1
+                        continue
                     try:
                         if entry.is_symlink():
                             continue
