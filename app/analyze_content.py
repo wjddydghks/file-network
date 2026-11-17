@@ -85,7 +85,9 @@ def run_content_analysis(root_path, max_bytes=DEFAULT_MAX_BYTES, is_cancelled=No
                 report_progress()
                 continue
 
-            result = extract_content(path, max_bytes=max_bytes, text_encoding=text_encoding)
+            extraction_options = {'is_cancelled': is_cancelled} if is_cancelled is not None else {}
+            result = extract_content(path, max_bytes=max_bytes, text_encoding=text_encoding, **extraction_options)
+            check_cancelled(is_cancelled)
             if source_fingerprint(path, max_bytes, text_encoding) != fingerprint:
                 result = TextExtractionResult(
                     str(path), "FAILED", reason="FILE_CHANGED_DURING_ANALYSIS"
@@ -95,6 +97,7 @@ def run_content_analysis(root_path, max_bytes=DEFAULT_MAX_BYTES, is_cancelled=No
                 str(path), "FAILED", reason="READ_ERROR", error=str(error)
             )
 
+        check_cancelled(is_cancelled)
         file_contents.save_file_content(file["id"], result, fingerprint)
         counts[result.status.lower()] += 1
         report_progress()
