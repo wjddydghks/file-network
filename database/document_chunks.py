@@ -1,5 +1,8 @@
 """분석 스냅샷에 연결된 로컬 인용 조회. 원본 파일은 열지 않는다."""
 from database import db, file_contents
+from database.content_search import literal_match_query
+from core.operations import check_cancelled
+import sqlite3
 
 
 def get_document_chunk(file_id, segment=0, analyzed_at=None):
@@ -43,4 +46,51 @@ def get_document_chunk(file_id, segment=0, analyzed_at=None):
         segment_count=max(1, result['chunk_count']),
         chunk_mode=True,
     )
+    return result
+
+
+def find_matching_citation(file_id, query, is_cancelled=None):
+    """선택 문서에만 임시 색인을 만들고 모든 검색어가 일치하는 첫 인용을 반환한다."""
+    if type(file_id) is not int or not 1 <= file_id < 2**63:
+        raise ValueError("올바른 파일 ID를 지정하세요.")
+    match_query = literal_match_query(query)
+    check_cancelled(is_cancelled)
+    db.initialize_database()
+    file_contents.initialize_file_contents()
+    with db.get_connection() as connection:
+        connection.execute('PRAGMA temp_store = MEMORY')
+        connection.execute('BEGIN')
+        snapshot = connection.execute("""
+            SELECT fc.analyzed_at FROM file_contents fc JOIN files f ON f.id=fc.file_id
+            WHERE fc.file_id=? AND fc.status='EXTRACTED' AND f.scan_status!='DELETED'
+        """, (file_id,)).fetchone()
+        if snapshot is None:
+            return None
+        if is_cancelled is not None:
+            connection.set_progress_handler(lambda: int(bool(is_cancelled())), 1000)
+        try:
+            connection.execute("CREATE VIRTUAL TABLE temp.citation_matches USING fts5(text, content='', tokenize='unicode61')")
+            connection.execute("""
+                INSERT INTO citation_matches(rowid, text)
+                SELECT chunk_index + 1, substr(fc.text, c.start_char + 1, c.end_char - c.start_char)
+                FROM document_chunks c JOIN file_contents fc ON fc.file_id=c.file_id
+                WHERE c.file_id=?
+            """, (file_id,))
+            match = connection.execute("""
+                SELECT rowid FROM citation_matches WHERE citation_matches MATCH ?
+                ORDER BY rowid LIMIT 1
+            """, (match_query,)).fetchone()
+        except sqlite3.OperationalError as error:
+            check_cancelled(is_cancelled)
+            if 'no such module: fts5' in str(error):
+                raise RuntimeError('현재 SQLite는 FTS5를 지원하지 않습니다.') from error
+            raise
+        finally:
+            connection.set_progress_handler(None, 0)
+    check_cancelled(is_cancelled)
+    if match is None:
+        return None
+    result = get_document_chunk(file_id, segment=match[0] - 1, analyzed_at=snapshot['analyzed_at'])
+    if result is None or result['status'] != 'EXTRACTED' or not result['chunk_count']:
+        return None
     return result
