@@ -39,7 +39,8 @@ def run_content_analysis(root_path, max_bytes=DEFAULT_MAX_BYTES, is_cancelled=No
         raise ValueError("max_bytes는 양의 정수여야 합니다.")
 
     root = Path(root_path).expanduser().resolve()
-    exclusions = ExcludedDirectories(root, excluded_dirs)
+    internal_files = db.database_artifact_paths(root)
+    exclusions = ExcludedDirectories(root, excluded_dirs, files=internal_files)
     scan_options = {}
     if excluded_dirs:
         scan_options['excluded_dirs'] = excluded_dirs
@@ -53,7 +54,7 @@ def run_content_analysis(root_path, max_bytes=DEFAULT_MAX_BYTES, is_cancelled=No
     counts = {"extracted": 0, "skipped": 0, "failed": 0, "unchanged": 0}
 
     files = db.get_active_files_under(root)
-    if excluded_dirs:
+    if excluded_dirs or internal_files:
         files = [file for file in files if not exclusions.contains_file(file['path'])]
 
     def report_progress():

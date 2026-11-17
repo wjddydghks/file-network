@@ -7,6 +7,7 @@ from database.db import (
     get_file_count,
     get_active_file_count
 )
+from database.db import database_artifact_paths
 
 from core.scanner.scanner import scan_directory
 from core.scanner.exclusions import validate_excluded_dirs
@@ -38,7 +39,11 @@ def main():
 
     total_saved = 0
 
-    for batch in scan_directory(args.path, excluded_dirs=excluded_dirs):
+    options = {'excluded_dirs': excluded_dirs}
+    internal_files = database_artifact_paths(args.path)
+    if internal_files:
+        options['excluded_files'] = internal_files
+    for batch in scan_directory(args.path, **options):
         saved = save_files(batch)
         total_saved += saved
 
