@@ -38,8 +38,21 @@ jobs:
           pip install -r requirements-gui.txt
 
       - name: Check Python syntax
-        run: python -m compileall -q app core database tests
+        run: python -m compileall -q app core database tests benchmarks
 
       - name: Run tests
         run: python -m pytest -v
+
+      - name: Benchmark mixed documents on Windows
+        if: runner.os == 'Windows'
+        run: python -m benchmarks.content_analysis --dataset mixed --files 600 --output benchmark-Windows.json
+
+      - name: Upload Windows benchmark summary
+        if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mixed-document-benchmark-Windows
+          path: benchmark-Windows.json
+          if-no-files-found: ignore
+          retention-days: 7
 
