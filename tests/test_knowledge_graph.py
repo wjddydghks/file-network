@@ -38,7 +38,7 @@ class Provider:
         name=request['response_format']['json_schema']['name']
         if name=='knowledge_summaries':
             return response({'summaries':[{'file':f['file'],'summary':f['sample'].split('[발췌 경계]')[0].strip()[:100],
-                'keywords':['프로젝트 일정'], 'quote':next(p.strip()[:25].strip() for p in f['sample'].split('[발췌 경계]') if p.strip())} for f in data['files']]})
+                'keywords':['프로젝트 일정'], 'evidence_id':f['evidence'][0]['id']} for f in data['files']]})
         if name=='knowledge_consolidation':
             records=data['records']
             return response({'groups':[{'label':'프로젝트 관리','description':'프로젝트 일정과 예산', 'members':[r['id'] for r in records]}]})
@@ -51,8 +51,8 @@ class Provider:
         assignments=[]
         for index,file in enumerate(data['files']):
             quote=file['sample'].split('[발췌 경계]')[0].strip()[:25].strip()
-            memberships=[{'category':'C1','reason':'본문에서 일정 검토를 다룹니다.','quote':quote}]
-            if index%2==0 and len(data['topics'])>1:memberships.append({'category':'C2','reason':'예산과도 관련된 자료입니다.','quote':quote})
+            memberships=[{'category':'C1','reason':'본문에서 일정 검토를 다룹니다.','evidence_id':file['evidence'][0]['id']}]
+            if index%2==0 and len(data['topics'])>1:memberships.append({'category':'C2','reason':'예산과도 관련된 자료입니다.','evidence_id':file['evidence'][0]['id']})
             assignments.append({'file':file['file'],'memberships':memberships})
         return response({'assignments':assignments})
 
@@ -329,7 +329,7 @@ class SubjectProvider(Provider):
                 'topics':[{'id':f'C{i+1}','parent':f'I{i+1}','label':label+' 분석','description':label+'에 관한 파일','sources':ids}
                           for i,(label,ids) in enumerate(parts)]})
         return response({'assignments':[{'file':f['file'],'memberships':[{'category':'C2' if '천체' in f['sample'] else 'C1',
-                'reason':'본문에서 해당 주제를 다룹니다.','quote':f['sample'][:25].strip()}]} for f in data['files']]})
+                'reason':'본문에서 해당 주제를 다룹니다.','evidence_id':f['evidence'][0]['id']}]} for f in data['files']]})
 
 
 def test_all_summary_coverage_preserves_minority_subject_through_reduction(area,monkeypatch):
@@ -400,3 +400,55 @@ def test_old_flat_taxonomy_cache_is_not_reused(area,monkeypatch):
     finally:knowledge.release(plan,token)
     current=prepare_knowledge(area)
     assert current.state() is None and current.calls==3
+
+
+def test_numbered_evidence_keeps_original_excel_whitespace_and_pdf_boundaries(area,monkeypatch):
+    text='회의록\r\n항목\t\t금액\r\n예산    100원\n일정\u00a0검토'
+    (area/'sheet.txt').write_bytes(text.encode('utf-8'))
+    run_content_analysis(area)
+    from core.knowledge_graph import evidence_options, validate_summaries, validate_assignments
+    doc=next(d for d in prepare_knowledge(area).eligible if d.name=='sheet.txt')
+    options=evidence_options(doc)
+    evidence_id=next(iter(options))
+    summary=validate_summaries([{'file':doc.alias,'summary':'예산과 일정 검토','keywords':['예산'],
+                               'evidence_id':evidence_id}],[doc],evidence_only=True)
+    assert summary[doc.alias]['quote'] in text
+    assert '\t\t' in summary[doc.alias]['quote'] and '\r\n' in summary[doc.alias]['quote']
+    knowledge.verify_quotes([doc],[(doc.alias,summary[doc.alias]['quote'])])
+    assignments=validate_assignments([{'file':doc.alias,'memberships':[{'category':'C1','reason':'예산 항목',
+        'evidence_id':evidence_id}]}],[doc],[{'id':'C1'}],evidence_only=True)
+    assert assignments[doc.alias][0]['quote']==summary[doc.alias]['quote']
+    split=replace(doc,sample='첫 페이지 근거\n[발췌 경계]\n두 번째 페이지 근거')
+    assert set(evidence_options(split).values())=={'첫 페이지 근거','두 번째 페이지 근거'}
+
+
+@pytest.mark.parametrize('stage',['summary','classification'])
+def test_unknown_or_other_file_evidence_ids_are_rejected(area,stage):
+    from core.knowledge_graph import evidence_options, validate_summaries, validate_assignments
+    first,second=prepare_knowledge(area).eligible[:2]
+    wrong_id=next(iter(evidence_options(second)))
+    with pytest.raises(ValueError,match='근거 번호'):
+        if stage=='summary':
+            validate_summaries([{'file':first.alias,'summary':'일정 검토','keywords':['일정'],
+                'evidence_id':wrong_id}],[first],evidence_only=True)
+        else:
+            validate_assignments([{'file':first.alias,'memberships':[{'category':'C1','reason':'일정 검토',
+                'evidence_id':wrong_id}]}],[first],[{'id':'C1'}],evidence_only=True)
+
+
+def test_live_requests_choose_evidence_ids_and_saved_quotes_still_resume(area,monkeypatch):
+    provider=Provider();monkeypatch.setattr(transport,'_request',provider)
+    plan=prepare_knowledge(area);partial=execute(plan,1)
+    assert len(partial['summaries'])==len(plan.eligible) and partial['topics'] is None
+    assert all(set(s)=={'summary','keywords','quote'} for s in partial['summaries'].values())
+    resumed=prepare_knowledge(area)
+    assert len(resumed.state()['summaries'])==len(plan.eligible)
+    assert execute(resumed)['complete']
+    for request in provider.calls:
+        name=request['response_format']['json_schema']['name']
+        if name not in ('knowledge_summaries','knowledge_memberships'):continue
+        data=json.loads(request['messages'][1]['content'])
+        for file in data['files']:
+            assert all(item['text'] in file['sample'] for item in file['evidence'])
+        schema=json.dumps(request['response_format'])
+        assert 'evidence_id' in schema and '"quote"' not in schema

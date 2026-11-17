@@ -61,14 +61,14 @@ def _call(plan, docs, key, cancelled, *, stage, topics=None, records=(), interes
         response = transport._request(request, key)
         data = _decode(response, {'summarize':'summaries','reduce':'groups','catalog':'catalog','classify':'assignments'}[stage])
         if stage == 'summarize':
-            data = validate_summaries(data, docs)
+            data = validate_summaries(data, docs, evidence_only=True)
             knowledge.verify_quotes(docs, [(alias, row['quote']) for alias, row in data.items()])
         elif stage == 'reduce':
             validate_groups(data, records)
         elif stage == 'catalog':
             validate_catalog(data['interests'], data['topics'], records)
         else:
-            data = validate_assignments(data, docs, topics)
+            data = validate_assignments(data, docs, topics, evidence_only=True)
             knowledge.verify_quotes(docs, [(alias,m['quote']) for alias,ms in data.items() for m in ms])
         transport._audit_finish(request_id, 'succeeded')
         return data
