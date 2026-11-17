@@ -16,12 +16,20 @@ def validate_text_encoding(encoding):
 
 
 @dataclass(frozen=True)
+class SourceSpan:
+    start: int
+    end: int
+    page: int
+
+
+@dataclass(frozen=True)
 class TextExtractionResult:
     path: str
     status: str
     text: str | None = None
     reason: str | None = None
     error: str | None = None
+    source_spans: tuple[SourceSpan, ...] = ()
 
 
 def extract_text(file_path, max_bytes=DEFAULT_MAX_BYTES, encoding="auto"):

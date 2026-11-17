@@ -160,6 +160,7 @@ file-network/
 ├── app/
 │   ├── main.py
 │   ├── gui.py
+│   ├── document_chunks.py
 │   ├── gui_settings.py
 │   ├── storage.py
 │   ├── desktop.py
@@ -170,6 +171,7 @@ file-network/
 │   ├── analyze_content.py
 │   └── search_content.py
 ├── core/
+│   ├── citations.py
 │   ├── operations.py
 │   ├── scanner/scanner.py
 │   └── extractors/
@@ -183,6 +185,7 @@ file-network/
 │   ├── file_contents.py
 │   ├── content_search.py
 │   ├── file_search.py
+│   ├── document_chunks.py
 │   └── unified_search.py
 ├── benchmarks/
 │   ├── content_analysis.py
@@ -473,6 +476,25 @@ python scripts/verify_desktop.py dist/FileNetwork/FileNetwork.exe --report packa
 
 검증 도구는 Python 환경변수를 제거하고 최소 시스템 PATH 및 빈 외부 작업 폴더에서 **빌드된 실행 파일**을 실행합니다. Windows에서는 실제 `windows` Qt 플랫폼으로 GUI 분석·검색·미리보기·설정 복원을 검사하고 합성 혼합 문서 18개의 추출/캐시/검색/수정·이동·삭제도 검사합니다. 실제 사용자 파일/DB/설정은 사용하지 않습니다. 성공한 배포 폴더만 artifact로 올리며 **desktop-verification-Windows**에는 집계 JSON을 보관합니다. 모든 사용자 PC의 실행을 보장하는 깨끗한 VM 설치 검증을 대신하는 것은 아닙니다.
 
+### 7.15 문서 인용 단위와 PDF 페이지 근거
+
+폴더를 **스캔·분석**한 뒤 검색 결과의 **저장된 본문 보기**에서 **인용 단위 · PDF 페이지 근거**를 선택합니다. 이전/다음으로 최대 2,000자씩 확인하며, PDF는 추출 시 기록한 실제 페이지 번호를 표시합니다. 빈 페이지·이미지 전용 페이지도 실제 페이지 순서에 포함하므로 2페이지 다음 인용이 4페이지일 수 있습니다. 이 번호는 1부터 시작하는 물리적 페이지 순서이며 문서에 인쇄된 쪽 번호와 다를 수 있습니다. OCR을 수행하거나 원본 레이아웃을 복원하지 않습니다.
+
+텍스트·코드·DOCX·XLSX·PPTX는 **추출 본문 문자 위치**를 표시하며 페이지 번호를 추정하지 않습니다. 인용 단위는 글자 수로 분할하므로 문장·단어·수식 경계가 나뉠 수 있습니다. PDF 인용은 실제 페이지 경계를 넘지 않으며 페이지 사이 구분 문자는 인용에서 제외합니다. 공백·빈 페이지에는 인용할 텍스트가 없을 수 있습니다.
+
+검색 CLI 결과의 `file_id`로도 조회할 수 있습니다.
+
+```bash
+python -m app.document_chunks 1
+python -m app.document_chunks 1 --chunk 2
+```
+
+`--chunk`는 1부터 시작합니다. JSON의 `segment`와 `start_char`는 0부터 시작하며 `end_char`는 포함하지 않습니다. `text`는 저장된 전체 본문의 `[start_char:end_char]`와 일치합니다. `page`는 PDF 실제 페이지 번호이며 다른 형식은 `null`입니다. `file_id`·`analyzed_at`·`source_fingerprint`와 인용 번호로 분석 시점의 근거를 구분합니다. 이전 결과의 `analyzed_at` 값을 `--revision`에 전달하면 다른 분석 버전의 내용을 섞어 읽지 않도록 거부합니다.
+
+인용 데이터는 로컬 DB의 `document_chunks`에 문자 범위만 저장하고 본문을 중복 저장하지 않습니다. 파일 변경·삭제가 스캔에서 확인되거나 재분석되면 이전 인용을 제거하며, 동일 확장자의 파일 이동은 기존 ID와 인용을 유지합니다. 인용 조회는 원본을 다시 열지 않는 **마지막 분석 시점의 스냅샷**입니다. 실제 원본이 바뀌었는지는 폴더를 다시 분석해서 확인하세요. 외부 API 전송은 없습니다.
+
+업데이트해도 기존 DB·본문은 보존합니다. 이전 버전에서 분석한 문서는 인용 정보가 없으므로 폴더를 한 번 다시 **스캔·분석**하세요. 추출기 버전 변경으로 기존 분석 캐시를 다시 생성하며, 이후 변경 없는 파일은 인용과 본문을 함께 재사용합니다. 의미 검색·문장 단위 청킹·Office 세부 위치(시트/셀/슬라이드) 인용은 후속 범위입니다.
+
 ## 8. 개발 현황
 
 현재 구현과 향후 계획을 구분합니다. PDF 및 DOCX·XLSX·PPTX 본문 추출까지 구현했으며, OCR·의미 검색·AI 연동·관계 그래프는 아직 구현하지 않았습니다. 기본 분석·검색 GUI는 아래 MVP 범위로 제공합니다.
@@ -511,7 +533,7 @@ python scripts/verify_desktop.py dist/FileNetwork/FileNetwork.exe --report packa
 ### 향후 개발 항목
 
 - [ ] 이미지 전용 PDF OCR
-- [ ] 문서 청크 및 페이지별 인용 데이터 관리
+- [x] 문서 인용 단위·문자 오프셋 저장 및 PDF 실제 페이지 근거 조회 (CLI·GUI)
 - [ ] 임베딩 기반 의미 검색
 - [ ] 생성형 AI API 연동
 - [ ] 문서 요약 및 질의응답

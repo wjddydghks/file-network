@@ -26,6 +26,7 @@ from database.content_search import search_content
 from database.file_search import search_filename
 from database.unified_search import search_all
 from database.file_contents import MAX_PREVIEW_CHARS, get_content_preview, list_analysis_results
+from database.document_chunks import get_document_chunk
 
 MATCH_SOURCE_LABELS = {"content": "본문", "name": "파일명"}
 
@@ -46,13 +47,17 @@ class ContentPreviewDialog(QDialog):
         self._closing = False
         self._result = result
         self._available = True
-        note = QLabel("마지막 분석 시점의 텍스트입니다. 최신 원본과 다를 수 있습니다. 구간은 글자 수 기준이며 원본 페이지가 아닙니다.")
-        note.setWordWrap(True)
+        self.note = QLabel()
+        self.note.setWordWrap(True)
         self.details = QPlainTextEdit()
         self.details.setReadOnly(True)
         self.details.setMaximumHeight(150)
         self.summary = QLabel()
         self.summary.setWordWrap(True)
+        self.mode = QComboBox()
+        self.mode.addItem("전체 본문 구간", "text")
+        self.mode.addItem("인용 단위 · PDF 페이지 근거", "chunks")
+        self.mode.currentIndexChanged.connect(lambda: self.load_segment(0))
         self.previous = QPushButton("이전 구간")
         self.previous.clicked.connect(lambda: self.load_segment(self._result['segment'] - 1))
         self.next = QPushButton("다음 구간")
@@ -60,7 +65,7 @@ class ContentPreviewDialog(QDialog):
         self.refresh = QPushButton("처음부터 새로 읽기")
         self.refresh.clicked.connect(lambda: self.load_segment(0, refresh=True))
         navigation = QHBoxLayout()
-        for widget in (self.previous, self.next, self.refresh):
+        for widget in (self.mode, self.previous, self.next, self.refresh):
             navigation.addWidget(widget)
         self.find_query = QLineEdit()
         self.find_query.setPlaceholderText("현재 표시 구간에서 찾기")
@@ -86,7 +91,7 @@ class ContentPreviewDialog(QDialog):
         close.setAutoDefault(False)
         close.clicked.connect(self.close)
         layout = QVBoxLayout(self)
-        for widget in (note, self.details, self.summary):
+        for widget in (self.note, self.details, self.summary):
             layout.addWidget(widget)
         layout.addLayout(navigation)
         layout.addLayout(find_row)
@@ -101,9 +106,18 @@ class ContentPreviewDialog(QDialog):
         self.details.setPlainText(format_analysis_detail(result))
         self.body.setPlainText(result['text'])
         total = result['total_chars']
-        start = result['segment'] * MAX_PREVIEW_CHARS + 1 if total else 0
-        end = start + len(result['text']) - 1 if total else 0
-        self.summary.setText(f"저장된 본문 {total:,}자 — 구간 {result['segment'] + 1:,}/{result['segment_count']:,} ({start:,}–{end:,}자)")
+        if result.get('chunk_mode'):
+            self.note.setText("마지막 분석 시점의 인용입니다. PDF 페이지는 1부터 세는 실제 페이지 순서이며 인쇄된 쪽 번호와 다를 수 있습니다. 다른 형식에는 페이지를 추정하지 않습니다.")
+            if result['chunk_count']:
+                location = f"PDF {result['page']:,}페이지" if result['page'] is not None else "추출 본문 위치"
+                self.summary.setText(f"인용 {result['segment'] + 1:,}/{result['chunk_count']:,} — {location}, {result['start_char'] + 1:,}–{result['end_char']:,}자 / 전체 {total:,}자")
+            else:
+                self.summary.setText("저장된 인용이 없습니다. 이전 버전에서 분석한 파일은 폴더를 다시 분석하세요.")
+        else:
+            self.note.setText("마지막 분석 시점의 텍스트입니다. 최신 원본과 다를 수 있습니다. 구간은 글자 수 기준이며 원본 페이지가 아닙니다.")
+            start = result['segment'] * MAX_PREVIEW_CHARS + 1 if total else 0
+            end = start + len(result['text']) - 1 if total else 0
+            self.summary.setText(f"저장된 본문 {total:,}자 — 구간 {result['segment'] + 1:,}/{result['segment_count']:,} ({start:,}–{end:,}자)")
         self.status.setText("현재 구간 안에서 찾습니다. 구간 경계를 가로지르는 단어는 찾지 않습니다.")
         self._set_busy(False)
 
@@ -111,6 +125,7 @@ class ContentPreviewDialog(QDialog):
         self.previous.setEnabled(not busy and self._available and self._result['segment'] > 0)
         self.next.setEnabled(not busy and self._available and self._result['segment'] + 1 < self._result['segment_count'])
         self.refresh.setEnabled(not busy)
+        self.mode.setEnabled(not busy)
         for widget in (self.find_query, self.find_previous, self.find_forward, self.body):
             widget.setEnabled(not busy and self._available)
 
@@ -122,7 +137,8 @@ class ContentPreviewDialog(QDialog):
         self._set_busy(True)
         self.status.setText("저장된 본문 구간 조회 중…")
         self._outcome = ("cancelled", None)
-        self.worker = TaskThread(lambda cancelled, progress: get_content_preview(file_id, segment=segment, analyzed_at=revision), self)
+        loader = get_document_chunk if self.mode.currentData() == "chunks" else get_content_preview
+        self.worker = TaskThread(lambda cancelled, progress: loader(file_id, segment=segment, analyzed_at=revision), self)
         self.worker.completed.connect(self._completed)
         self.worker.failed.connect(self._failed)
         self.worker.finished.connect(self._finished)

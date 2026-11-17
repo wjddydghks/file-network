@@ -846,3 +846,83 @@ def test_gui_office_analysis_search_and_invalid_document_details(application, wi
     wait_until(application, lambda: view.worker is None)
     assert view.table.rowCount() == 1
     assert "Office 문서 읽기·해석 실패" in view.preview.toPlainText()
+
+
+def test_gui_citations_keep_pdf_page_numbers_and_switch_back(application, window):
+    from tests.test_pdf_extraction import make_pdf
+    view, root = window
+    make_pdf(root / 'note.pdf', ('', 'citationkeyword second page', '', 'fourth page'))
+    run_content_analysis(root)
+    view.query.setText('citationkeyword')
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    view.start_content_preview()
+    wait_until(application, lambda: view.worker is None)
+    dialog = view.content_dialog
+    dialog.mode.setCurrentIndex(dialog.mode.findData('chunks'))
+    wait_until(application, lambda: dialog.worker is None)
+    assert 'PDF 2페이지' in dialog.summary.text()
+    assert '인용 1/2' in dialog.summary.text()
+    assert dialog.body.toPlainText() == 'citationkeyword second page'
+    QTest.mouseClick(dialog.next, Qt.MouseButton.LeftButton)
+    assert not dialog.mode.isEnabled()
+    wait_until(application, lambda: dialog.worker is None)
+    assert 'PDF 4페이지' in dialog.summary.text()
+    assert dialog.body.toPlainText() == 'fourth page'
+    dialog.mode.setCurrentIndex(dialog.mode.findData('text'))
+    wait_until(application, lambda: dialog.worker is None)
+    assert 'fourth page' in dialog.body.toPlainText()
+    assert '원본 페이지가 아닙니다' in dialog.note.text()
+    dialog.close()
+    application.processEvents()
+
+
+def test_gui_citation_changed_revision_clears_body_and_refreshes(application, window):
+    view, root = window
+    path = root / 'note.txt'
+    path.write_text('citationkeyword original', encoding='utf-8')
+    run_content_analysis(root)
+    view.query.setText('citationkeyword')
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    view.start_content_preview()
+    wait_until(application, lambda: view.worker is None)
+    dialog = view.content_dialog
+    path.write_text('replacement content longer', encoding='utf-8')
+    run_content_analysis(root)
+    dialog.mode.setCurrentIndex(dialog.mode.findData('chunks'))
+    wait_until(application, lambda: dialog.worker is None)
+    assert not dialog.body.toPlainText()
+    assert '분석 결과가 변경' in dialog.status.text()
+    assert dialog.refresh.isEnabled() and dialog.mode.isEnabled()
+    QTest.mouseClick(dialog.refresh, Qt.MouseButton.LeftButton)
+    wait_until(application, lambda: dialog.worker is None)
+    assert dialog.body.toPlainText() == 'replacement content longer'
+    assert '추출 본문 위치' in dialog.summary.text()
+    assert 'PDF' not in dialog.summary.text()
+    dialog.close()
+    application.processEvents()
+
+
+def test_gui_citation_legacy_data_requires_reanalysis(application, window):
+    view, root = window
+    (root / 'note.txt').write_text('citationkeyword old', encoding='utf-8')
+    run_content_analysis(root)
+    with db.get_connection() as connection:
+        connection.execute('DELETE FROM document_chunks')
+    view.query.setText('citationkeyword')
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    view.start_content_preview()
+    wait_until(application, lambda: view.worker is None)
+    dialog = view.content_dialog
+    dialog.mode.setCurrentIndex(dialog.mode.findData('chunks'))
+    wait_until(application, lambda: dialog.worker is None)
+    assert not dialog.body.toPlainText()
+    assert '다시 분석' in dialog.summary.text()
+    assert not dialog.next.isEnabled()
+    dialog.mode.setCurrentIndex(dialog.mode.findData('text'))
+    wait_until(application, lambda: dialog.worker is None)
+    assert dialog.body.toPlainText() == 'citationkeyword old'
+    dialog.close()
+    application.processEvents()

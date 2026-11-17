@@ -1,7 +1,7 @@
 from pathlib import Path
 import stat
 
-from core.extractors.text import DEFAULT_MAX_BYTES, TextExtractionResult
+from core.extractors.text import DEFAULT_MAX_BYTES, SourceSpan, TextExtractionResult
 
 
 DEFAULT_MAX_PAGES = 200
@@ -48,15 +48,18 @@ def extract_pdf(
                 return TextExtractionResult(result_path, "SKIPPED", reason="PAGE_LIMIT_EXCEEDED")
 
             pages = []
+            spans = []
             character_count = 0
             requires_ocr = False
-            for page in document:
+            for page_number, page in enumerate(document, 1):
                 text = page.get_text("text", sort=True).rstrip("\r\n")
                 if not text.strip() and page.get_image_info():
                     requires_ocr = True
-                character_count += len(text) + (len(PAGE_SEPARATOR) if pages else 0)
+                start = character_count + (len(PAGE_SEPARATOR) if pages else 0)
+                character_count = start + len(text)
                 if character_count > max_text_chars:
                     return TextExtractionResult(result_path, "SKIPPED", reason="TEXT_LIMIT_EXCEEDED")
+                spans.append(SourceSpan(start, character_count, page_number))
                 pages.append(text)
 
             text = PAGE_SEPARATOR.join(pages)
@@ -64,7 +67,7 @@ def extract_pdf(
                 reason = "OCR_REQUIRED" if requires_ocr else "NO_TEXT"
                 return TextExtractionResult(result_path, "SKIPPED", reason=reason)
             return TextExtractionResult(
-                result_path, "EXTRACTED", text=text,
+                result_path, "EXTRACTED", text=text, source_spans=tuple(spans),
                 reason="PARTIAL_OCR_REQUIRED" if requires_ocr else None,
             )
     except (
