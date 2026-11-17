@@ -425,3 +425,37 @@ def test_rare_subject_keeps_its_file_through_fast_global_grouping(area,monkeypat
     assert state['assignments'][rare_doc.alias][0]['quote'] in rare_doc.sample
     first=json.loads(provider.calls[0]['messages'][1]['content'])['records']
     assert all('summary' not in r and 'quote' not in r and 'aliases' not in r for r in first)
+
+
+@pytest.mark.parametrize('mode',['missing','duplicates','unused'])
+def test_catalog_header_count_does_not_discard_valid_file_assignments(area,monkeypatch,mode):
+    provider=Provider()
+    def request(payload,key):
+        reply=provider(payload,key);data=json.loads(reply['choices'][0]['message']['content'])
+        if mode=='missing':data['interests']=[]
+        elif mode=='duplicates':data['interests']*=12
+        else:data['interests'].append({'id':'I8','label':'사용하지 않은 제안','description':'미사용 주제'})
+        return response(data)
+    monkeypatch.setattr(transport,'_request',request)
+    plan=prepare_knowledge(area);state=execute(plan)
+    assert state['complete'] and len(state['assignments'])==3
+    assert len(state['interests'])==1 and state['interests'][0]['id']=='I1'
+    assert len(provider.calls)==1 and prepare_knowledge(area).calls==0
+    if mode=='missing':assert '세부 주제명' in state['interests'][0]['description']
+
+
+def test_discarded_duplicate_interest_is_still_checked_for_sensitive_data():
+    from core.knowledge_graph import normalize_interests
+    interests=[{'id':'I1','label':'프로젝트 관리','description':'프로젝트 관리'},
+               {'id':'I1','label':'user@example.com','description':'비공개 연락 정보'}]
+    with pytest.raises(ValueError,match='민감정보'):normalize_interests(interests,[{'parent':'I1','label':'일정 검토'}])
+
+
+def test_catalog_schema_enforces_interest_and_topic_counts():
+    from core.knowledge_graph import KnowledgePlan,payload
+    plan=KnowledgePlan('/local','','gpt-4.1-mini',())
+    schema=payload(plan,(),stage='catalog',records=[{'id':'F1','summary':'일정'}])['response_format']['json_schema']['schema']
+    assert schema['properties']['interests']['minItems']==1
+    assert schema['properties']['interests']['maxItems']==8
+    assert schema['properties']['topics']['minItems']==1
+    assert schema['properties']['topics']['maxItems']==48

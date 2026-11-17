@@ -212,7 +212,7 @@ def payload(plan, docs, topics=None, *, stage='classify', records=(), interests=
         context = {'files': files}
         prompt, tokens, name = SUMMARY_PROMPT, 10000, 'knowledge_summaries'
     elif stage == 'reduce':
-        schema = obj({'groups': {'type': 'array', 'items': obj({
+        schema = obj({'groups': {'type': 'array', 'minItems':1, 'maxItems':MAX_GROUPS, 'items': obj({
             'id': _strings([f'G{i}' for i in range(1,MAX_GROUPS+1)]),
             'label': _strings(), 'description': _strings()})},
             'assignments': obj({r['id']: {'$ref':'#/$defs/group_id'} for r in records})})
@@ -220,10 +220,10 @@ def payload(plan, docs, topics=None, *, stage='classify', records=(), interests=
         schema['$defs']={'group_id':_strings([f'G{i}' for i in range(1,MAX_GROUPS+1)])}
         prompt, tokens, name = REDUCE_PROMPT, 10000, 'knowledge_consolidation'
     elif stage == 'catalog':
-        schema = obj({'interests': {'type': 'array', 'items': obj({
+        schema = obj({'interests': {'type': 'array', 'minItems':1, 'maxItems':MAX_INTERESTS, 'items': obj({
             'id': _strings([f'I{i}' for i in range(1, MAX_INTERESTS+1)]),
             'label': _strings(), 'description': _strings()})},
-            'topics': {'type': 'array', 'items': obj({
+            'topics': {'type': 'array', 'minItems':1, 'maxItems':MAX_TOPICS, 'items': obj({
                 'id': _strings([f'C{i}' for i in range(1, MAX_TOPICS+1)]),
                 'parent': _strings([f'I{i}' for i in range(1, MAX_INTERESTS+1)]),
                 'label': _strings(), 'description': _strings()})},
@@ -314,6 +314,33 @@ def _coverage(groups, records, member_key):
         raise ValueError('주제 통합에서 일부 문서 요약이 누락되었습니다.')
 
 
+def normalize_interests(interests,topics):
+    """Recover display headers from existing AI parent assignments, without moving or dropping files."""
+    if not isinstance(interests,list):
+        raise ValueError('상위 관심사 목록 형식이 올바르지 않습니다.')
+    roots={}
+    for root in interests:
+        if (not isinstance(root,dict) or set(root)!={'id','label','description'}
+                or not isinstance(root['id'],str) or not re.fullmatch(r'I[1-8]',root['id'])):
+            raise ValueError('상위 관심사 식별자가 올바르지 않습니다.')
+        # Inspect even discarded duplicates/unused headings before any later transmission.
+        validate_label(root['label'],root['description'])
+        roots.setdefault(root['id'],root)
+    result=[]
+    for parent in dict.fromkeys(topic['parent'] for topic in topics):
+        if not isinstance(parent,str) or not re.fullmatch(r'I[1-8]',parent):
+            raise ValueError('세부 주제의 상위 관심사 식별자가 올바르지 않습니다.')
+        if parent in roots:
+            result.append(roots[parent])
+            continue
+        labels=[topic['label'] for topic in topics if topic['parent']==parent]
+        label=labels[0] if len(labels)==1 else labels[0][:45]+f' 외 {len(labels)-1}개 주제'
+        # AI already chose this parent ID; only the missing heading is derived locally.
+        result.append({'id':parent,'label':label,
+                       'description':('상위 제목이 반환되지 않아 세부 주제명으로 표시했습니다: '+', '.join(labels))[:240]})
+    return result
+
+
 def resolve_record_mapping(data, records, *, catalog=False):
     """Required object keys guarantee coverage in structured API output; saved format stays compatible."""
     item_key, member_key = ('topics','sources') if catalog else ('groups','members')
@@ -342,7 +369,7 @@ def resolve_record_mapping(data, records, *, catalog=False):
     # Unused proposals aren't fabricated as file-bearing topics.
     resolved = [item for item in by_id.values() if item[member_key]]
     if catalog:
-        interests = data['interests']
+        interests = normalize_interests(data['interests'],resolved)
         validate_catalog(interests,resolved,records)
         return {'interests':interests,'topics':resolved}
     validate_groups(resolved,records)
