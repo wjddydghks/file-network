@@ -76,6 +76,45 @@ def run_smoke():
                 wait_for(lambda: view.worker is None)
                 if len(view._results) != 1 or 'packagekeyword' not in view.preview.toPlainText():
                     raise RuntimeError('패키지 GUI 검색 실패')
+                view.knowledge_button.click()
+                wait_for(lambda: view.knowledge_dialog is not None and view.knowledge_dialog.plan is not None and view.knowledge_dialog.worker is None)
+                kg = view.knowledge_dialog
+                if len(kg.plan.documents) != 3 or len(kg.plan.eligible) != 3 or kg.run.isEnabled():
+                    raise RuntimeError('패키지 지식 그래프 자동 준비/승인 검증 실패')
+                from core.knowledge_graph import empty_state, validate_state
+                from database import knowledge
+                state = empty_state(kg.plan)
+                first = kg.plan.eligible[0]
+                def sample_quote(doc):
+                    return next((part.strip() for part in doc.sample.split('[발췌 경계]') if part.strip()), '')[:100].strip()
+                quote = sample_quote(first)
+                state['topics'] = [{'id':'C1','label':'검증 자료','description':'패키지 자체 검증의 로컬 자료', 'file':first.alias,'quote':quote}]
+                state['assignments'] = {d.alias:[{'category':'C1','reason':'자체 검증 자료입니다.', 'quote':sample_quote(d)}] for d in kg.plan.eligible}
+                state['complete'] = True
+                validate_state(state,kg.plan)
+                knowledge.verify_quotes(kg.plan.eligible,[(alias,ms[0]['quote']) for alias,ms in state['assignments'].items()])
+                token = knowledge.acquire(kg.plan)
+                try:
+                    knowledge.save(kg.plan,token,state)
+                finally:
+                    knowledge.release(kg.plan,token)
+                kg.prepare.click()
+                wait_for(lambda: kg.plan is not None and kg.worker is None)
+                if kg.plan.calls != 0 or not kg.state['complete']:
+                    raise RuntimeError('패키지 지식 그래프 저장 결과 재사용 실패')
+                kg.graph.selector.setCurrentIndex(kg.graph.selector.findData('C1'))
+                if kg.table.rowCount() != 3:
+                    raise RuntimeError('패키지 지식 그래프 노드별 파일 목록 실패')
+                for index,doc in enumerate(kg.page_documents):
+                    if doc.name == 'package-pages.pdf':
+                        kg.table.selectRow(index)
+                        break
+                kg.preview.click()
+                wait_for(lambda: kg.worker is None)
+                if kg._preview is None or kg._preview['page'] != 2:
+                    raise RuntimeError('패키지 지식 그래프 본문 미리보기 실패')
+                kg.close()
+                wait_for(lambda: view.knowledge_dialog is None)
                 view.area_button.click()
                 wait_for(lambda: view.area_dialog is not None and view.area_dialog.snapshot is not None and view.area_dialog.worker is None)
                 area = view.area_dialog
@@ -189,6 +228,7 @@ def run_smoke():
             finally:
                 view.close()
                 wait_for(lambda: view.worker is None and view.scope_worker is None)
+                wait_for(lambda: view.knowledge_dialog is None or view.knowledge_dialog.worker is None)
                 wait_for(lambda: view.area_dialog is None or not view.area_dialog.has_active_work)
                 wait_for(lambda: view.ai_dialog is None or view.ai_dialog.worker is None)
                 wait_for(lambda: view.content_dialog is None or view.content_dialog.worker is None)
@@ -212,6 +252,6 @@ def run_smoke():
     return {
         'success': True, 'frozen': frozen, 'platform': platform.platform(),
         'database_outside_bundle': outside_bundle, 'gui_platform': app.platformName(),
-        'gui': {'analysis': True, 'search': True, 'preview': True, 'citations': True, 'office_citations': True, 'matching_citation': True, 'related_documents': True, 'relation_graph': True, 'graph_navigation': True, 'exclusions': True, 'settings_restore': True, 'writable_data_directory': True, 'internal_db_exclusion': True, 'ai_local_preview': True, 'area_structure_map': True, 'area_interest_filter': True, 'ai_theme_preview': True},
+        'gui': {'analysis': True, 'search': True, 'preview': True, 'citations': True, 'office_citations': True, 'matching_citation': True, 'related_documents': True, 'relation_graph': True, 'graph_navigation': True, 'exclusions': True, 'settings_restore': True, 'writable_data_directory': True, 'internal_db_exclusion': True, 'ai_local_preview': True, 'area_structure_map': True, 'area_interest_filter': True, 'ai_theme_preview': True, 'knowledge_auto_prepare': True, 'knowledge_graph_file_navigation': True},
         'benchmark': benchmark,
     }
