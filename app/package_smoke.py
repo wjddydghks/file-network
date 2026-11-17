@@ -94,6 +94,21 @@ def run_smoke():
                 wait_for(lambda: area.worker is None)
                 if area._preview is None or area._preview['page'] != 2:
                     raise RuntimeError('패키지 영역 지도 실제 인용 확인 실패')
+                area.theme_button.click()
+                theme = area.theme_dialog
+                if theme is None:
+                    raise RuntimeError('패키지 AI 주제 분석 화면 열기 실패')
+                theme.add.click()
+                theme.candidates.setCurrentIndex(1)
+                theme.add.click()
+                theme.prepare.click()
+                wait_for(lambda: theme.worker is None)
+                if (theme._plan is None or len(theme._plan.sources) != 2
+                        or theme.enabled.isChecked() or theme.send.isEnabled()
+                        or 'excerpt_theme_map' not in theme.payload.toPlainText()):
+                    raise RuntimeError('패키지 AI 주제 분석 로컬 승인 미리보기 실패')
+                theme.close()
+                wait_for(lambda: area.theme_dialog is None)
                 area.close()
                 wait_for(lambda: view.area_dialog is None)
                 view.ai_button.click()
@@ -174,7 +189,7 @@ def run_smoke():
             finally:
                 view.close()
                 wait_for(lambda: view.worker is None and view.scope_worker is None)
-                wait_for(lambda: view.area_dialog is None or view.area_dialog.worker is None)
+                wait_for(lambda: view.area_dialog is None or not view.area_dialog.has_active_work)
                 wait_for(lambda: view.ai_dialog is None or view.ai_dialog.worker is None)
                 wait_for(lambda: view.content_dialog is None or view.content_dialog.worker is None)
                 view.close()
@@ -197,6 +212,6 @@ def run_smoke():
     return {
         'success': True, 'frozen': frozen, 'platform': platform.platform(),
         'database_outside_bundle': outside_bundle, 'gui_platform': app.platformName(),
-        'gui': {'analysis': True, 'search': True, 'preview': True, 'citations': True, 'office_citations': True, 'matching_citation': True, 'related_documents': True, 'relation_graph': True, 'graph_navigation': True, 'exclusions': True, 'settings_restore': True, 'writable_data_directory': True, 'internal_db_exclusion': True, 'ai_local_preview': True, 'area_structure_map': True, 'area_interest_filter': True},
+        'gui': {'analysis': True, 'search': True, 'preview': True, 'citations': True, 'office_citations': True, 'matching_citation': True, 'related_documents': True, 'relation_graph': True, 'graph_navigation': True, 'exclusions': True, 'settings_restore': True, 'writable_data_directory': True, 'internal_db_exclusion': True, 'ai_local_preview': True, 'area_structure_map': True, 'area_interest_filter': True, 'ai_theme_preview': True},
         'benchmark': benchmark,
     }

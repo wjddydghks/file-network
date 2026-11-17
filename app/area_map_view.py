@@ -66,6 +66,7 @@ class AreaMapDialog(QDialog):
         self.worker = None
         self._closing = False
         self.snapshot = None
+        self.theme_dialog = None
         self._preview = None
         self._outcome = ('cancelled', None)
         self.back = QPushButton('상위 범위')
@@ -82,6 +83,8 @@ class AreaMapDialog(QDialog):
         self.apply = QPushButton('관심 영역 강조')
         self.apply.setObjectName('primary')
         self.apply.clicked.connect(self.apply_interest)
+        self.theme_button = QPushButton('AI 주제·관계 분석')
+        self.theme_button.clicked.connect(self.open_theme_analysis)
         self.summary = text_label('선택 영역의 저장 구조를 읽고 있습니다.')
         self.scene = QGraphicsScene(self)
         self.canvas = GraphCanvas(self.scene, self)
@@ -139,6 +142,7 @@ class AreaMapDialog(QDialog):
         row = QHBoxLayout()
         row.addWidget(self.interest, 1)
         row.addWidget(self.apply)
+        row.addWidget(self.theme_button)
         layout.addLayout(row)
         layout.addWidget(self.summary)
         split = QSplitter(Qt.Orientation.Horizontal)
@@ -278,6 +282,7 @@ class AreaMapDialog(QDialog):
         busy, data = self.worker is not None, self.snapshot
         for widget in (self.home, self.refresh, self.interest, self.apply, self.table, self.selector, self.fit):
             widget.setEnabled(not busy)
+        self.theme_button.setEnabled(not busy and data is not None and sum(r['status'] == 'EXTRACTED' for r in data['files']) >= 2)
         self.back.setEnabled(not busy and data is not None and (data['focus'] != self.root or data['selected_type'] is not None))
         self.open_group_button.setEnabled(not busy and self.selector.currentIndex() >= 0)
         self.group_previous.setEnabled(not busy and data is not None and data['group_offset'] > 0)
@@ -354,18 +359,51 @@ class AreaMapDialog(QDialog):
         self.file_count.setText(f"문서 {data['file_offset'] + 1 if count else 0}–{data['file_offset'] + count if count else 0} / {total:,}")
         self.status.setText(f"묶음 {data['group_offset'] + 1 if groups else 0}–{data['group_offset'] + len(groups) if groups else 0} / {data['group_count']:,} · 파일 목록은 {FILE_PAGE_SIZE}개씩 표시합니다. 외부 전송 없음.")
 
+    @Slot()
+    def open_theme_analysis(self):
+        if self.worker is not None or not self.snapshot:
+            return
+        if self.theme_dialog is not None:
+            self.theme_dialog.raise_()
+            return
+        candidates = [r for r in self.snapshot['files'] if r['status'] == 'EXTRACTED']
+        if len(candidates) < 2:
+            self.status.setText('현재 파일 페이지에 본문 분석이 완료된 문서가 최소 2개 필요합니다.')
+            return
+        from app.theme_dialog import ThemeAnalysisDialog
+        self.theme_dialog = ThemeAnalysisDialog(candidates, self.root, self.snapshot['interest'], self)
+        self.theme_dialog.finished.connect(self._clear_theme_dialog)
+        self.theme_dialog.show()
+
+    @Slot()
+    def _clear_theme_dialog(self):
+        self.theme_dialog = None
+        if self._closing:
+            self.close()
+
+    @property
+    def has_active_work(self):
+        return self.worker is not None or (self.theme_dialog is not None and self.theme_dialog.worker is not None)
+
     def closeEvent(self, event):
         self._closing = True
         if self.worker is not None:
             self.worker.cancel_event.set()
             self.status.setText('조회 종료 후 닫습니다.')
             event.ignore()
+        elif self.theme_dialog is not None and self.theme_dialog.worker is not None:
+            self.theme_dialog.close()
+            event.ignore()
         else:
+            if self.theme_dialog is not None:
+                self.theme_dialog.close()
             super().closeEvent(event)
 
     def reject(self):
-        if self.worker is not None:
+        if self.has_active_work or self.theme_dialog is not None:
             self.close()
         else:
             self._closing = True
+            if self.theme_dialog is not None:
+                self.theme_dialog.close()
             super().reject()

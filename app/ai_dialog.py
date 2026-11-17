@@ -36,6 +36,8 @@ def source_location(page, kind, label, segment):
 
 
 class AIQuestionDialog(QDialog):
+    MAX_SOURCES = 4
+
     def __init__(self, candidates, selected=0, parent=None):
         super().__init__(parent)
         self.setWindowTitle('선택 인용으로 AI 질문 · OpenAI')
@@ -50,6 +52,8 @@ class AIQuestionDialog(QDialog):
         self._sent_question = ''
         self._outcome = ('cancelled', None)
         self.candidates = QComboBox()
+        self.candidates.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.candidates.setMinimumContentsLength(24)
         for item in candidates:
             self.candidates.addItem(item['path'], item['file_id'])
         self.candidates.setCurrentIndex(selected)
@@ -145,8 +149,8 @@ class AIQuestionDialog(QDialog):
         if self.worker is not None or self.candidates.currentIndex() < 0:
             return
         selection = (self.candidates.currentData(), self.chunk.value() - 1)
-        if len(self._selections) >= 4 or selection in self._selections:
-            self.status.setText('중복 없이 최대 4개 인용을 선택하세요.')
+        if len(self._selections) >= self.MAX_SOURCES or selection in self._selections:
+            self.status.setText(f'중복 없이 최대 {self.MAX_SOURCES}개 인용을 선택하세요.')
             return
         self._selections.append(selection)
         self.sources.addItem(f'{self.candidates.currentText()} · 인용 {selection[1] + 1}')
@@ -201,7 +205,7 @@ class AIQuestionDialog(QDialog):
         self.invalidate_plan()
         question, model, selections = self.question.toPlainText(), self.model.text(), tuple(self._selections)
         self.status.setText('로컬에서 선택 인용 확인 중… 외부 호출 없음.')
-        self._start('prepare', lambda cancelled: prepare_question(question, selections, model))
+        self._start('prepare', lambda cancelled: self.prepare_plan(question, selections, model))
 
     @Slot()
     def send_request(self):
@@ -213,12 +217,9 @@ class AIQuestionDialog(QDialog):
         self._sent_question = plan.question
         self._plan = None  # 성공·오류·중단 후 다시 미리보기/승인해야 한다.
         self.approve.setChecked(False)
-        self._answer = None
-        self.answer.clear()
-        self.citations.clear()
-        self.reference.clear()
+        self.clear_response()
         self.status.setText('OpenAI 요청 중… 중복 전송하지 마세요. 닫기를 누르면 처리 종료를 기다립니다. 이미 전송된 요청은 취소할 수 없습니다.')
-        self._start('send', lambda cancelled: ask_question(plan, approval, api_key=key, enabled=True, is_cancelled=cancelled))
+        self._start('send', lambda cancelled: self.request_plan(plan, approval, key, cancelled))
 
     @Slot()
     def load_citation(self):
@@ -261,12 +262,7 @@ class AIQuestionDialog(QDialog):
             self.tabs.setCurrentIndex(0)
             self.status.setText('외부 호출 없음. 질문·본문과 정책을 확인한 뒤 외부 AI 허용 및 전송 동의를 선택하세요.')
         elif self._kind == 'send':
-            self._answer = result
-            self.answer.setPlainText('질문: ' + self._sent_question + '\n\n답변:\n' + result['answer'])
-            for s in result['citations']:
-                self.citations.addItem(f"{s['source_id']} · {s['path']} · 인용 {s['segment'] + 1} · {source_location(s['page'], s['source_kind'], s['source_label'], s['segment'])}", s)
-            self.tabs.setCurrentIndex(2)
-            self.status.setText('AI 답변은 참고용입니다. 로컬 근거를 확인하세요. 추가 요청은 미리보기와 승인을 다시 진행하세요.')
+            self.display_response(result)
         elif self._kind == 'citation':
             if result and result['status'] == 'EXTRACTED' and result['chunk_count']:
                 self.reference.setPlainText(result['text'])
@@ -274,6 +270,26 @@ class AIQuestionDialog(QDialog):
             else:
                 self.status.setText('로컬 근거가 삭제되거나 변경되었습니다. 다시 분석·검색하세요.')
         self.update_buttons()
+
+    def prepare_plan(self, question, selections, model):
+        return prepare_question(question, selections, model)
+
+    def request_plan(self, plan, approval, key, cancelled):
+        return ask_question(plan, approval, api_key=key, enabled=True, is_cancelled=cancelled)
+
+    def clear_response(self):
+        self._answer = None
+        self.answer.clear()
+        self.citations.clear()
+        self.reference.clear()
+
+    def display_response(self, result):
+        self._answer = result
+        self.answer.setPlainText('질문: ' + self._sent_question + '\n\n답변:\n' + result['answer'])
+        for s in result['citations']:
+            self.citations.addItem(f"{s['source_id']} · {s['path']} · 인용 {s['segment'] + 1} · {source_location(s['page'], s['source_kind'], s['source_label'], s['segment'])}", s)
+        self.tabs.setCurrentIndex(2)
+        self.status.setText('AI 답변은 참고용입니다. 로컬 근거를 확인하세요. 추가 요청은 미리보기와 승인을 다시 진행하세요.')
 
     def _clear_sensitive(self):
         self.key.clear()

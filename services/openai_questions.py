@@ -104,6 +104,12 @@ def _parse_answer(response, plan):
 
 
 def ask_question(plan, approval_id, *, api_key=None, enabled=None, is_cancelled=None):
+    return _execute_approved_request(plan, approval_id, api_key=api_key, enabled=enabled,
+                                     is_cancelled=is_cancelled)
+
+
+def _execute_approved_request(plan, approval_id, *, api_key=None, enabled=None, is_cancelled=None,
+                              validator=validate_plan, parser=_parse_answer):
     active = os.environ.get('FILE_NETWORK_AI_ENABLED') == '1' if enabled is None else enabled is True
     if not active:
         raise ValueError('외부 AI가 비활성화되어 있습니다. FILE_NETWORK_AI_ENABLED=1로 명시적으로 활성화하세요.')
@@ -111,7 +117,7 @@ def ask_question(plan, approval_id, *, api_key=None, enabled=None, is_cancelled=
             or not hmac.compare_digest(approval_id, plan.approval_id())):
         raise ValueError('현재 전송 내용에 대한 승인이 필요합니다.')
     check_cancelled(is_cancelled)
-    validate_plan(plan)
+    validator(plan)
     check_current_sources(plan)
     key = os.environ.get('OPENAI_API_KEY', '') if api_key is None else api_key
     if not isinstance(key, str) or not key or not key.isascii() or any(c.isspace() or ord(c) < 33 or ord(c) > 126 for c in key):
@@ -121,7 +127,7 @@ def ask_question(plan, approval_id, *, api_key=None, enabled=None, is_cancelled=
     try:
         check_cancelled(is_cancelled)
         response = _request(plan.payload(), key)
-        result = _parse_answer(response, plan)
+        result = parser(response, plan)
         _audit_finish(request_id, 'succeeded')
         return {**result, 'request_id': request_id, 'provider': 'openai', 'model': plan.model}
     except BaseException:
