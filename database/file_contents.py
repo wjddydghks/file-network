@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from contextlib import closing
 from os import sep
 from pathlib import Path
 
@@ -52,6 +53,30 @@ def get_content_state(file_id):
             (file_id,),
         ).fetchone()
         return dict(row) if row else None
+
+
+CONTENT_STATE_BATCH_SIZE = 500
+
+
+def get_content_states(file_ids):
+    """파일 ID 묶음의 상태·지문만 읽고 연결을 명시적으로 닫는다."""
+    if not file_ids:
+        return {}
+    states = {}
+    with closing(db.get_connection()) as connection:
+        for start in range(0, len(file_ids), CONTENT_STATE_BATCH_SIZE):
+            batch = file_ids[start:start + CONTENT_STATE_BATCH_SIZE]
+            placeholders = ','.join('?' for _ in batch)
+            rows = connection.execute(f"""
+                SELECT file_id, status, source_fingerprint
+                FROM file_contents WHERE file_id IN ({placeholders})
+            """, batch).fetchall()
+            for row in rows:
+                states[row['file_id']] = {
+                    'status': row['status'],
+                    'source_fingerprint': row['source_fingerprint'],
+                }
+    return states
 
 
 def save_file_content(file_id, result, source_fingerprint):
