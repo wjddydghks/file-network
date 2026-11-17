@@ -153,7 +153,7 @@ def run_smoke():
                 view.close()
             finally:
                 view.close()
-                wait_for(lambda: view.worker is None)
+                wait_for(lambda: view.worker is None and view.scope_worker is None)
                 wait_for(lambda: view.ai_dialog is None or view.ai_dialog.worker is None)
                 wait_for(lambda: view.content_dialog is None or view.content_dialog.worker is None)
                 view.close()
@@ -166,6 +166,8 @@ def run_smoke():
                 if restored.worker is not None:
                     raise RuntimeError('시작 시 자동 작업이 실행되었습니다.')
             finally:
+                restored.close()
+                wait_for(lambda: restored.scope_worker is None)
                 restored.close()
                 restored.deleteLater()
                 app.processEvents()

@@ -45,7 +45,7 @@ def window(application, tmp_path, monkeypatch):
     application.processEvents()
     yield view, root
     view.close()
-    wait_until(application, lambda: view.worker is None)
+    wait_until(application, lambda: view.worker is None and view.scope_worker is None)
     view.close()
     view.deleteLater()
     application.processEvents()
@@ -449,6 +449,8 @@ def test_gui_settings_autosave_restore_without_query_or_automatic_work(applicati
         assert not db.DB_PATH.exists()
     finally:
         restored.close()
+        wait_until(application, lambda: restored.scope_worker is None)
+        restored.close()
         restored.deleteLater()
         application.processEvents()
 
@@ -470,6 +472,8 @@ def test_gui_corrupt_settings_startup_and_close_preserve_original(application, t
         assert not db.DB_PATH.exists()
     finally:
         view.close()
+        wait_until(application, lambda: view.scope_worker is None)
+        view.close()
         view.deleteLater()
         application.processEvents()
 
@@ -483,6 +487,7 @@ def test_gui_reset_settings_keeps_original_file_and_analysis_database(applicatio
     run_content_analysis(root)
     view.limit.setValue(77)
     view.search_target.setCurrentIndex(view.search_target.findData('all'))
+    view.options_toggle.setChecked(True)
     QTest.mouseClick(view.reset_settings_button, Qt.MouseButton.LeftButton)
     assert view._current_settings() == GuiSettings()
     assert load_settings(view.settings_path)[0] == GuiSettings()
@@ -540,6 +545,8 @@ def test_gui_default_settings_location_uses_standard_config_directory(applicatio
         assert view.settings_path == target
         assert view.folder.text() == 'remembered folder'
     finally:
+        view.close()
+        wait_until(application, lambda: view.scope_worker is None)
         view.close()
         view.deleteLater()
         application.processEvents()
@@ -948,6 +955,8 @@ def test_gui_excluded_folders_analysis_validation_and_reset(application, window)
     view._save_settings(force=True)
     restored = gui.MainWindow(settings_path=view.settings_path)
     assert restored.excluded_dirs.text() == ' skip, node_modules '
+    restored.close()
+    wait_until(application, lambda: restored.scope_worker is None)
     restored.close()
     restored.deleteLater()
     view.reset_settings()
