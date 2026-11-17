@@ -102,8 +102,14 @@ class QuestionPlan:
 
 def prepare_question(question, selections, model=DEFAULT_MODEL):
     validate_text(question, MAX_QUESTION_CHARS, '질문')
-    if not 1 <= len(selections) <= MAX_SOURCES or len(set(selections)) != len(selections):
-        raise ValueError('중복 없이 1~4개 인용을 선택하세요.')
+    plan = QuestionPlan(question, model, collect_sources(selections))
+    validate_plan(plan)
+    return plan
+
+
+def collect_sources(selections, max_sources=MAX_SOURCES):
+    if not 1 <= len(selections) <= max_sources or len(set(selections)) != len(selections):
+        raise ValueError(f'중복 없이 1~{max_sources}개 인용을 선택하세요.')
     sources = []
     for file_id, segment in selections:
         chunk = get_document_chunk(file_id, segment)
@@ -113,16 +119,14 @@ def prepare_question(question, selections, model=DEFAULT_MODEL):
         sources.append(Source(f'S{len(sources) + 1}', file_id, segment, chunk['analyzed_at'],
                               chunk['path'], chunk['source_kind'], chunk['source_label'],
                               chunk['page'], chunk['text']))
-    plan = QuestionPlan(question, model, tuple(sources))
-    validate_plan(plan)
-    return plan
+    return tuple(sources)
 
 
-def validate_plan(plan):
+def validate_plan(plan, *, max_sources=MAX_SOURCES, max_context_chars=MAX_CONTEXT_CHARS):
     if not isinstance(plan.model, str) or not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}', plan.model):
         raise ValueError('올바른 OpenAI 모델 이름을 지정하세요.')
     validate_text(plan.question, MAX_QUESTION_CHARS, '질문')
-    if not 1 <= len(plan.sources) <= MAX_SOURCES or sum(len(s.text) for s in plan.sources) > MAX_CONTEXT_CHARS:
+    if not 1 <= len(plan.sources) <= max_sources or sum(len(s.text) for s in plan.sources) > max_context_chars:
         raise ValueError('전송 인용 범위를 초과했습니다.')
     categories = set(sensitive_categories(plan.question))
     for source in plan.sources:

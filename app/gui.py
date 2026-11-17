@@ -980,7 +980,7 @@ class MainWindow(QMainWindow):
             self._closing = True
             self.cancel_task()
             event.ignore()
-        elif self.area_dialog is not None and self.area_dialog.worker is not None:
+        elif self.area_dialog is not None and self.area_dialog.has_active_work:
             self._closing = True
             self.area_dialog.close()
             event.ignore()
