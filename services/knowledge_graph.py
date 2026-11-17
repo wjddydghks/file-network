@@ -1,4 +1,5 @@
 """영역 전체 자동 분류. 전송 계획 승인 한 번, 단계별 검증/저장, 자동 재시도 없음."""
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 import hmac
 import json
 import os
@@ -8,7 +9,7 @@ from types import SimpleNamespace
 from core.ai_questions import DEFAULT_MODEL
 from core.knowledge_graph import (BATCH_SIZE, KnowledgePlan, empty_state, payload,
                                   catalog_frontier, validate_assignments, validate_catalog, validate_config,
-                                  validate_groups, validate_summaries)
+                                  validate_groups, validate_summaries, resolve_record_mapping)
 from core.operations import check_cancelled
 from core.scanner.exclusions import validate_excluded_dirs
 from database import knowledge
@@ -34,9 +35,9 @@ def _decode(response, key):
         if choice['finish_reason'] != 'stop' or choice['message'].get('refusal'):
             raise ValueError()
         data = json.loads(choice['message']['content'])
-        if not isinstance(data, dict) or set(data) != ({'interests','topics'} if key == 'catalog' else {key}):
+        if not isinstance(data, dict) or set(data) != ({'interests','topics','assignments'} if key == 'catalog' else {'groups','assignments'} if key == 'reduce' else {key}):
             raise ValueError()
-        return data if key == 'catalog' else data[key]
+        return data if key in ('catalog','reduce') else data[key]
     except (KeyError, IndexError, TypeError, ValueError, RecursionError):
         raise transport.AIServiceError('AI 분류 응답이 잘렸거나 형식이 올바르지 않습니다. 자동 재시도하지 않습니다.') from None
 
@@ -59,14 +60,14 @@ def _call(plan, docs, key, cancelled, *, stage, topics=None, records=(), interes
     try:
         check_cancelled(cancelled)
         response = transport._request(request, key)
-        data = _decode(response, {'summarize':'summaries','reduce':'groups','catalog':'catalog','classify':'assignments'}[stage])
+        data = _decode(response, {'summarize':'summaries','reduce':'reduce','catalog':'catalog','classify':'assignments'}[stage])
         if stage == 'summarize':
             data = validate_summaries(data, docs, evidence_only=True)
             knowledge.verify_quotes(docs, [(alias, row['quote']) for alias, row in data.items()])
         elif stage == 'reduce':
-            validate_groups(data, records)
+            data = resolve_record_mapping(data, records)
         elif stage == 'catalog':
-            validate_catalog(data['interests'], data['topics'], records)
+            data = resolve_record_mapping(data, records, catalog=True)
         else:
             data = validate_assignments(data, docs, topics, evidence_only=True)
             knowledge.verify_quotes(docs, [(alias,m['quote']) for alias,ms in data.items() for m in ms])
@@ -107,16 +108,39 @@ def run_knowledge(plan, approval_id, *, max_calls, api_key=None, enabled=False, 
             if progress:
                 progress({'phase': phase, 'done': done, 'total': total, 'calls': calls})
 
+        def process_batches(documents, stage, target):
+            nonlocal calls
+            batches = [documents[i:i+BATCH_SIZE] for i in range(0,len(documents),BATCH_SIZE)]
+            offset, error = 0, None
+            with ThreadPoolExecutor(max_workers=2, thread_name_prefix='knowledge') as pool:
+                pending = set()
+                while pending or offset < len(batches):
+                    # At most two already-approved calls in flight. Never retry or exceed the budget.
+                    while (error is None and not (is_cancelled and is_cancelled()) and len(pending)<2
+                           and offset<len(batches) and calls<max_calls):
+                        batch=batches[offset];offset+=1;calls+=1
+                        pending.add(pool.submit(_call,plan,batch,key,is_cancelled,stage=stage,
+                                                topics=state['topics'],interests=state['interests']))
+                    if not pending:
+                        break
+                    ready,pending=wait(pending,return_when=FIRST_COMPLETED)
+                    for future in ready:
+                        try:
+                            result=future.result()
+                        except Exception as exc:
+                            if error is None:error=exc
+                        else:
+                            target.update(result)
+                            checkpoint(stage,len(target),len(plan.eligible))
+                    # Drain and save successful in-flight work even when another call failed/cancelled.
+                if error is not None:raise error
+            check_cancelled(is_cancelled)
+            return offset==len(batches)
+
         # No taxonomy can be frozen until EVERY eligible file has contributed its summary.
         remaining_summaries = [d for d in plan.eligible if d.alias not in state['summaries']]
-        for start in range(0, len(remaining_summaries), BATCH_SIZE):
-            if calls >= max_calls:
-                return state
-            check_cancelled(is_cancelled)
-            batch = remaining_summaries[start:start+BATCH_SIZE]
-            state['summaries'].update(_call(plan, batch, key, is_cancelled, stage='summarize'))
-            calls += 1
-            checkpoint('summarize', len(state['summaries']), len(plan.eligible))
+        if not process_batches(remaining_summaries,'summarize',state['summaries']):
+            return state
         if not plan.eligible:
             state['topics'] = []
         elif not state['topics']:
@@ -141,15 +165,7 @@ def run_knowledge(plan, approval_id, *, max_calls, api_key=None, enabled=False, 
             calls += 1
             checkpoint('catalog', len(state['topics']), len(state['topics']))
         remaining = [d for d in plan.eligible if d.alias not in state['assignments']]
-        for start in range(0, len(remaining), BATCH_SIZE):
-            if calls >= max_calls:
-                break
-            check_cancelled(is_cancelled)
-            batch = remaining[start:start+BATCH_SIZE]
-            state['assignments'].update(_call(plan, batch, key, is_cancelled, stage='classify',
-                                             topics=state['topics'], interests=state['interests']))
-            calls += 1
-            checkpoint('classify', len(state['assignments']), len(plan.eligible))
+        process_batches(remaining,'classify',state['assignments'])
         check_cancelled(is_cancelled)
         if knowledge.read_documents(plan.root, is_cancelled,excluded_dirs=plan.excluded_dirs) != plan.documents:
             raise ValueError('분석 중 영역의 저장 파일이 변경되었습니다. 다시 준비하세요.')

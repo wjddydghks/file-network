@@ -27,6 +27,12 @@ def area(tmp_path,monkeypatch):
 
 
 def response(data):
+    if 'groups' in data and all('members' in g for g in data['groups']):
+        data={'groups':[{'id':f'G{i+1}',**{k:v for k,v in g.items() if k!='members'}} for i,g in enumerate(data['groups'])],
+              'assignments':{member:f'G{i+1}' for i,g in enumerate(data['groups']) for member in g['members']}}
+    elif 'topics' in data and all('sources' in t for t in data['topics']):
+        data={'interests':data['interests'],'topics':[{k:v for k,v in t.items() if k!='sources'} for t in data['topics']],
+              'assignments':{source:t['id'] for t in data['topics'] for source in t['sources']}}
     return {'choices':[{'finish_reason':'stop','message':{'content':json.dumps(data,ensure_ascii=False)}}]}
 
 
@@ -148,13 +154,18 @@ def test_cancel_after_batch_persists_and_can_resume(area,monkeypatch):
     for index in range(BATCH_SIZE+2):(area/f'extra{index}.txt').write_text('프로젝트 일정 예산 자료',encoding='utf-8')
     run_content_analysis(area)
     provider=Provider();monkeypatch.setattr(transport,'_request',provider)
-    plan=prepare_knowledge(area);cancel=Event()
+    plan=prepare_knowledge(area);cancel=Event();completed=[]
     def progress(data):
-        if data['phase']=='classify':cancel.set()
+        if data['phase']=='classify':completed.append(data['done']);cancel.set()
     with pytest.raises(OperationCancelled):execute(plan,is_cancelled=cancel.is_set,progress=progress)
     resumed=prepare_knowledge(area)
-    assert len(resumed.state()['assignments'])==BATCH_SIZE
-    assert execute(resumed)['complete']
+    done=set(resumed.state()['assignments'])
+    assert done and len(done)==completed[-1]
+    before=len(provider.calls)
+    assert resumed.state()['complete'] or execute(resumed)['complete']
+    sent=[file['file'] for request in provider.calls[before:] if request['response_format']['json_schema']['name']=='knowledge_memberships'
+          for file in json.loads(request['messages'][1]['content'])['files']]
+    assert not done.intersection(sent)
 
 
 @pytest.mark.parametrize('bad',['missing','duplicate','unknown_file','unknown_category','fake_quote','extra','truncated','refusal'])
@@ -222,8 +233,8 @@ def test_invalid_taxonomy_never_reaches_file_classification(area,monkeypatch,mod
         reply=provider(payload,key)
         if payload['response_format']['json_schema']['name']!='knowledge_hierarchy':return reply
         data=json.loads(reply['choices'][0]['message']['content'])
-        if mode=='unknown_source':data['topics'][0]['sources']=['F99999']
-        elif mode=='missing_source':data['topics'].pop()
+        if mode=='unknown_source':data['assignments']['F99999']='C1'
+        elif mode=='missing_source':data['assignments'].pop(next(iter(data['assignments'])))
         elif mode=='duplicate_topic':data['topics'][1]['id']='C1'
         else:data['topics'][0]['label']='user@example.com'
         return response(data)
@@ -486,3 +497,68 @@ def test_optional_keyword_variations_do_not_abort_paid_batch(area,monkeypatch,wo
 def test_keyword_cleanup_does_not_hide_sensitive_discarded_text(words):
     from core.knowledge_graph import normalize_keywords
     with pytest.raises(ValueError,match='민감정보'):normalize_keywords(words)
+
+
+@pytest.mark.parametrize('catalog',[False,True])
+def test_required_record_mapping_prevents_omission_and_keeps_legacy_checkpoint_format(catalog):
+    from core.knowledge_graph import KnowledgePlan, payload, resolve_record_mapping
+    records=[{'id':f'F{i}','summary':'일정 검토','aliases':[f'F{i}']} for i in range(64)]
+    plan=KnowledgePlan('/local','','gpt-4.1-mini',())
+    request=payload(plan,(),stage='catalog' if catalog else 'reduce',records=records)
+    schema=request['response_format']['json_schema']['schema']
+    mapping=schema['properties']['assignments']
+    assert set(mapping['required'])=={r['id'] for r in records}
+    assert mapping['additionalProperties'] is False
+    if catalog:
+        reply={'interests':[{'id':'I1','label':'프로젝트 관리','description':'프로젝트 진행'}],
+               'topics':[{'id':'C1','parent':'I1','label':'일정 검토','description':'프로젝트 일정 검토'}],
+               'assignments':{r['id']:'C1' for r in records}}
+    else:
+        reply={'groups':[{'id':'G1','label':'일정 검토','description':'프로젝트 일정 검토'}],
+               'assignments':{r['id']:'G1' for r in records}}
+    result=resolve_record_mapping(reply,records,catalog=catalog)
+    members=result['topics'][0]['sources'] if catalog else result[0]['members']
+    assert set(members)=={r['id'] for r in records}
+    reply['assignments'].pop('F63')
+    with pytest.raises(ValueError,match='필수 요약 배정'):resolve_record_mapping(reply,records,catalog=catalog)
+
+
+def test_two_parallel_batches_obey_budget_and_persist_before_taxonomy(area,monkeypatch):
+    from threading import Barrier,Lock
+    for i in range(20):(area/f'extra{i}.txt').write_text('프로젝트 일정 검토',encoding='utf-8')
+    run_content_analysis(area)
+    barrier,lock=Barrier(2),Lock()
+    provider=Provider();active=peak=0
+    def request(payload,key):
+        nonlocal active,peak
+        with lock:active+=1;peak=max(peak,active)
+        try:
+            barrier.wait(timeout=5)
+            return provider(payload,key)
+        finally:
+            with lock:active-=1
+    monkeypatch.setattr(transport,'_request',request)
+    plan=prepare_knowledge(area);state=execute(plan,2)
+    assert peak==2 and len(provider.calls)==2
+    assert len(state['summaries'])==len(plan.eligible) and state['topics'] is None
+    loaded=prepare_knowledge(area)
+    assert len(loaded.state()['summaries'])==len(plan.eligible)
+
+
+def test_successful_inflight_batch_survives_other_batch_failure(area,monkeypatch):
+    from threading import Event
+    for i in range(20):(area/f'extra{i}.txt').write_text('프로젝트 일정 검토',encoding='utf-8')
+    run_content_analysis(area)
+    plan=prepare_knowledge(area);ready=Event();provider=Provider()
+    first_alias=plan.eligible[0].alias
+    def request(payload,key):
+        files=json.loads(payload['messages'][1]['content'])['files']
+        if files[0]['file']==first_alias:
+            assert ready.wait(5)
+            raise transport.AIServiceError('mock failed batch')
+        reply=provider(payload,key);ready.set();return reply
+    monkeypatch.setattr(transport,'_request',request)
+    with pytest.raises(transport.AIServiceError,match='mock failed'):execute(plan,2)
+    saved=prepare_knowledge(area).state()
+    assert set(saved['summaries'])=={d.alias for d in plan.eligible[BATCH_SIZE:]}
+    assert saved['topics'] is None
