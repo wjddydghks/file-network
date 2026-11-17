@@ -1070,3 +1070,75 @@ def test_gui_matching_citation_cancel_keeps_results(application, window, monkeyp
     assert view._outcome[0] == 'cancelled'
     assert view._results == before and view.table.currentRow() == 0
     assert view.citation_button.isEnabled() and view.content_button.isEnabled()
+
+
+def test_gui_related_documents_keywords_preview_and_citation(application, window):
+    view, root = window
+    (root / 'source.txt').write_text('galaxy telescope astronomy', encoding='utf-8')
+    (root / 'other.txt').write_text('galaxy telescope science', encoding='utf-8')
+    run_content_analysis(root)
+    view.search_target.setCurrentIndex(view.search_target.findData('all'))
+    view.query.setText('astronomy')
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    assert view.related_button.isEnabled()
+    view.related_button.click()
+    assert not view.related_button.isEnabled()
+    wait_until(application, lambda: view.worker is None)
+    assert view._view_mode == 'related' and len(view._results) == 1
+    assert view._results[0]['name'] == 'other.txt'
+    assert view.table.horizontalHeaderItem(1).text() == '공유 키워드'
+    assert 'galaxy' in view.preview.toPlainText()
+    assert '공유 키워드' in view.preview.toPlainText()
+    assert 'source.txt' in view.status.text()
+    assert view.citation_button.isEnabled() and view.content_button.isEnabled()
+    view.start_matching_citation()
+    wait_until(application, lambda: view.worker is None)
+    assert view.content_dialog is not None
+    assert 'galaxy' in view.content_dialog.body.toPlainText()
+    view.content_dialog.close()
+    application.processEvents()
+    view.start_related_documents()
+    wait_until(application, lambda: view.worker is None)
+    assert view._results[0]['name'] == 'source.txt'
+
+
+def test_gui_related_error_preserves_filename_results(application, window):
+    view, root = window
+    (root / 'image.png').write_bytes(b'\xff')
+    view.start_analysis()
+    wait_until(application, lambda: view.worker is None)
+    view.search_target.setCurrentIndex(view.search_target.findData('name'))
+    view.query.setText('image')
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    before = list(view._results)
+    view.start_related_documents()
+    wait_until(application, lambda: view.worker is None)
+    assert view._outcome[0] == 'failed'
+    assert '분석이 완료된' in view.status.text()
+    assert view._results == before and view.table.currentRow() == 0
+    assert view.related_button.isEnabled()
+
+
+def test_gui_related_cancellation_preserves_original_results(application, window, monkeypatch):
+    view, root = window
+    (root / 'source.txt').write_text('galaxy', encoding='utf-8')
+    run_content_analysis(root)
+    view.query.setText('galaxy')
+    view.start_search()
+    wait_until(application, lambda: view.worker is None)
+    before = list(view._results)
+    started = Event()
+    def waiting(file_id, limit, root_path, is_cancelled):
+        started.set()
+        while not is_cancelled():
+            time.sleep(0.005)
+        check_cancelled(is_cancelled)
+    monkeypatch.setattr(gui, 'find_related_documents', waiting)
+    view.start_related_documents()
+    wait_until(application, started.is_set)
+    view.cancel_task()
+    wait_until(application, lambda: view.worker is None)
+    assert view._outcome[0] == 'cancelled' and view._results == before
+    assert view.related_button.isEnabled() and view.content_button.isEnabled()
