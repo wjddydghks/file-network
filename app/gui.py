@@ -1,5 +1,6 @@
 """File Network의 로컬 분석·검색용 최소 데스크톱 화면."""
 import sys
+from datetime import datetime
 from collections import deque
 from pathlib import Path
 from threading import Event
@@ -9,7 +10,7 @@ try:
     from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut, QTextCursor, QTextDocument
     from PySide6.QtWidgets import (
         QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QHBoxLayout, QHeaderView, QLabel,
-        QLineEdit, QMainWindow, QPlainTextEdit, QProgressBar, QPushButton,
+        QLineEdit, QListWidgetItem, QMainWindow, QPlainTextEdit, QProgressBar, QPushButton,
         QSpinBox, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
     )
 except ImportError as error:
@@ -21,6 +22,8 @@ except ImportError as error:
 
 from app.analyze_content import run_content_analysis
 from app.analysis_details import STATUS_LABELS, format_analysis_detail, reason_label
+from app.workspace_ui import build_workspace
+from database.workspace_status import get_workspace_status
 from app.gui_settings import GuiSettings, load_settings, save_settings
 from core.operations import check_cancelled
 from core.search_queries import parse_query_terms
@@ -285,17 +288,10 @@ class MainWindow(QMainWindow):
         self.cancel = QPushButton("취소")
         self.cancel.setEnabled(False)
         self.cancel.clicked.connect(self.cancel_task)
-        folder_row = QHBoxLayout()
-        for widget in (self.folder, self.browse, QLabel("파일 크기 제한"), self.max_size, self.text_encoding, self.analyze, self.cancel):
-            folder_row.addWidget(widget)
         self.excluded_dirs = QLineEdit()
         self.excluded_dirs.setMaxLength(26000)
         self.excluded_dirs.setPlaceholderText("예: .git, node_modules, .venv (비워 두면 제외 없음)")
         self.excluded_dirs.setToolTip("쉼표로 구분한 폴더명 전체를 모든 깊이에서 제외합니다. 선택한 루트 자체는 제외하지 않습니다. 기존 DB·검색 결과는 유지되며 삭제하지 않습니다.")
-        exclusions_row = QHBoxLayout()
-        exclusions_row.addWidget(QLabel("분석 제외 폴더"))
-        exclusions_row.addWidget(self.excluded_dirs)
-
         self.query = QLineEdit()
         self.query.setPlaceholderText("본문 검색어 — 여러 단어는 모두 포함하는 문서 검색")
         self.query.returnPressed.connect(self.start_search)
@@ -312,10 +308,6 @@ class MainWindow(QMainWindow):
         self.limit.setValue(100)
         self.search = QPushButton("검색")
         self.search.clicked.connect(self.start_search)
-        search_row = QHBoxLayout()
-        for widget in (self.search_target, self.query, self.all_folders, QLabel("최대 결과"), self.limit, self.search):
-            search_row.addWidget(widget)
-
         self.analysis_filter = QComboBox()
         self.analysis_filter.addItem("전체 상태", None)
         for status, label in STATUS_LABELS.items():
@@ -325,13 +317,6 @@ class MainWindow(QMainWindow):
         self.reset_settings_button = QPushButton("설정 초기화")
         self.reset_settings_button.setToolTip("저장된 화면 설정만 기본값으로 되돌립니다.")
         self.reset_settings_button.clicked.connect(self.reset_settings)
-        details_row = QHBoxLayout()
-        details_row.addWidget(QLabel("파일별 분석 상태"))
-        details_row.addWidget(self.analysis_filter)
-        details_row.addWidget(self.details_button)
-        details_row.addStretch(1)
-        details_row.addWidget(self.reset_settings_button)
-
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(["파일명", "경로", "일치 본문"])
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -343,11 +328,6 @@ class MainWindow(QMainWindow):
         self.preview = QPlainTextEdit()
         self.preview.setReadOnly(True)
         self.preview.setPlaceholderText("검색 결과를 선택하면 일치 본문 또는 파일명을 표시합니다.")
-        splitter = QSplitter(Qt.Orientation.Vertical)
-        splitter.addWidget(self.table)
-        splitter.addWidget(self.preview)
-        splitter.setSizes([400, 160])
-
         self.selected_path = QLabel("선택된 파일 없음")
         self.selected_path.setTextFormat(Qt.TextFormat.PlainText)
         self.selected_path.setWordWrap(True)
@@ -371,14 +351,6 @@ class MainWindow(QMainWindow):
         self.ai_button = QPushButton('AI 질문')
         self.ai_button.setEnabled(False)
         self.ai_button.clicked.connect(self.open_ai_dialog)
-        open_row = QHBoxLayout()
-        open_row.addWidget(self.selected_path, 1)
-        open_row.addWidget(self.ai_button)
-        open_row.addWidget(self.content_button)
-        open_row.addWidget(self.citation_button)
-        open_row.addWidget(self.related_button)
-        open_row.addWidget(self.graph_button)
-        open_row.addWidget(self.open_button)
         self.progress = QProgressBar()
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
@@ -389,19 +361,7 @@ class MainWindow(QMainWindow):
         self.settings_status.setTextFormat(Qt.TextFormat.PlainText)
         self.settings_status.setWordWrap(True)
 
-        layout = QVBoxLayout()
-        layout.addLayout(folder_row)
-        layout.addLayout(exclusions_row)
-        layout.addLayout(search_row)
-        layout.addLayout(details_row)
-        layout.addWidget(splitter, 1)
-        layout.addLayout(open_row)
-        layout.addWidget(self.progress)
-        layout.addWidget(self.status)
-        layout.addWidget(self.settings_status)
-        central = QWidget()
-        central.setLayout(layout)
-        self.setCentralWidget(central)
+        build_workspace(self)
         self._apply_settings(self._saved_settings)
         self._settings_notice(settings_notice)
         self._settings_timer = QTimer(self)
@@ -416,6 +376,136 @@ class MainWindow(QMainWindow):
         for spin in (self.max_size, self.limit):
             spin.valueChanged.connect(self._schedule_settings)
         self.all_folders.toggled.connect(self._schedule_settings)
+
+        self.scope_worker = None
+        self._scope_request = None
+        self._scope_outcome = ('cancelled', None)
+        self._scope_refresh_pending = False
+        self._scope_timer = QTimer(self)
+        self._scope_timer.setSingleShot(True)
+        self._scope_timer.setInterval(250)
+        self._scope_timer.timeout.connect(self.refresh_workspace_status)
+        self.folder.textChanged.connect(self._scope_changed)
+        self.all_folders.toggled.connect(self._scope_changed)
+        self.folder_history.itemClicked.connect(self._select_history_folder)
+        self.refresh_scope.clicked.connect(self.refresh_workspace_status)
+        QTimer.singleShot(0, self.refresh_workspace_status)
+
+    @Slot()
+    def _scope_changed(self):
+        self.folder.setToolTip(self.folder.text())
+        self.scope_badge.setText('확인 중')
+        self.scope_detail.setText('선택 범위의 저장 상태를 확인하고 있습니다.')
+        for value in self.scope_metrics.values():
+            value.setText('—')
+        self._scope_timer.start()
+
+    def _select_history_folder(self, item):
+        if self.worker is None:
+            self.all_folders.setChecked(False)
+            self.folder.setText(item.data(Qt.ItemDataRole.UserRole))
+            self._schedule_settings()
+
+    @Slot()
+    def refresh_workspace_status(self):
+        if self._closing:
+            return
+        if self.scope_worker is not None:
+            self._scope_refresh_pending = True
+            return
+        self._scope_timer.stop()
+        self._scope_request = (self.folder.text().strip(), self.all_folders.isChecked())
+        path, all_folders = self._scope_request
+        self._scope_outcome = ('cancelled', None)
+        self.scope_worker = TaskThread(lambda cancelled, progress: get_workspace_status(
+            None if all_folders or not path else path, is_cancelled=cancelled), self)
+        self.scope_worker.completed.connect(lambda result: setattr(self, '_scope_outcome', ('completed', result)))
+        self.scope_worker.failed.connect(lambda message: setattr(self, '_scope_outcome', ('failed', message)))
+        self.scope_worker.finished.connect(self._scope_finished)
+        self.scope_worker.start()
+
+    @Slot()
+    def _scope_finished(self):
+        worker = self.scope_worker
+        self.scope_worker = None
+        worker.deleteLater()
+        if self._closing:
+            self.close()
+            return
+        current = (self.folder.text().strip(), self.all_folders.isChecked())
+        outcome, data = self._scope_outcome
+        if current == self._scope_request:
+            if outcome == 'completed':
+                self._render_workspace_status(data)
+            elif outcome == 'failed':
+                self.scope_badge.setText('확인 실패')
+                self.scope_detail.setText('저장 상태를 읽지 못했습니다. 잠시 후 새로고침하세요. ' + str(data))
+        if self._scope_refresh_pending or current != self._scope_request:
+            self._scope_refresh_pending = False
+            self.refresh_workspace_status()
+
+    def _render_workspace_status(self, data):
+        selected_path = self.folder_history.currentItem()
+        previous = selected_path.data(Qt.ItemDataRole.UserRole) if selected_path else None
+        target = self.folder.text().strip() or previous
+        self.folder_history.clear()
+        for folder in data['folders']:
+            path = folder['root_path']
+            item = QListWidgetItem(Path(path).name or path)
+            item.setToolTip(path + '\n마지막 스캔: ' + folder['last_scanned_at'])
+            item.setData(Qt.ItemDataRole.UserRole, path)
+            self.folder_history.addItem(item)
+            if path == target:
+                self.folder_history.setCurrentItem(item)
+        all_folders = self.all_folders.isChecked()
+        self.scope_title.setText('모든 저장 폴더의 검색 범위' if all_folders else '선택한 폴더의 검색 범위')
+        if not self.folder.text().strip() and not all_folders:
+            self.scope_badge.setText('폴더 선택')
+            self.scope_detail.setText('폴더를 선택하거나 왼쪽 스캔 기록에서 경로를 고르세요.')
+            return
+        attention = data['pending'] + data['stale'] + data['failed']
+        for key, value in self.scope_metrics.items():
+            value.setText(f"{attention if key == 'attention' else data[key]:,}")
+        scan = data['scan']
+        incomplete = scan and (scan['status'] != 'COMPLETED' or not scan['scan_complete'])
+        if data['root'] is not None and not data['root_available']:
+            text, state = '경로 접근 확인', 'attention'
+        elif self.worker is not None and self._kind == 'analysis':
+            text, state = '분석 중', 'attention'
+        elif incomplete:
+            text, state = '미완료 스캔 기록', 'attention'
+        elif attention:
+            text, state = '분석 확인 필요', 'attention'
+        elif data['extracted']:
+            text, state = '본문 검색 가능', 'ready'
+        elif data['files']:
+            text, state = '본문 검색 불가', 'attention'
+        elif scan:
+            text, state = '스캔 기록 · 저장 파일 없음', 'attention'
+        else:
+            text, state = '미분석 범위', 'attention'
+        self.scope_badge.setText(text)
+        self.scope_badge.setProperty('state', state)
+        self.scope_badge.style().unpolish(self.scope_badge)
+        self.scope_badge.style().polish(self.scope_badge)
+        def display_time(value):
+            if not value:
+                return '없음'
+            try:
+                return datetime.fromisoformat(value).astimezone().strftime('%Y.%m.%d %H:%M %Z')
+            except ValueError:
+                return value
+        saved = display_time(data['last_saved_at'])
+        detail = f"미분석 {data['pending']:,} · 재분석 필요 {data['stale']:,} · 실패 {data['failed']:,} | 마지막 본문 저장: {saved}"
+        if scan:
+            detail += '\n최근 스캔: ' + display_time(scan['completed_at'] or scan['started_at'])
+        if data['root'] is not None and not data['root_available']:
+            detail += '\n폴더가 없거나 접근할 수 없습니다. 저장된 데이터는 모든 분석 폴더에서 확인할 수 있습니다.'
+        if scan and not all_folders and scan['root_path'] != data['root']:
+            detail += '\n상위 폴더 스캔 기록: ' + scan['root_path'] + ' (제외 범위·누락 가능)'
+        notice = '저장된 내역 기준입니다. 스캔 완료는 본문 분석 완료를 뜻하지 않으며, 실제 파일 변경은 다시 분석해야 확인됩니다.'
+        self.scope_detail.setToolTip(detail + '\n' + notice)
+        self.scope_detail.setText(detail + '\n실제 파일 변경은 다시 분석해야 확인됩니다.')
 
     def _settings_notice(self, message):
         self.settings_status.setText(message or '')
@@ -564,6 +654,9 @@ class MainWindow(QMainWindow):
     def _set_busy(self, busy):
         for widget in (self.folder, self.excluded_dirs, self.browse, self.max_size, self.text_encoding, self.analyze, self.query, self.search_target, self.all_folders, self.limit, self.search, self.table, self.analysis_filter, self.details_button, self.reset_settings_button):
             widget.setEnabled(not busy)
+        if busy and self._kind == 'analysis':
+            self.scope_badge.setText('분석 중')
+        self.folder_history.setEnabled(not busy)
         self.ai_button.setEnabled(not busy and self.table.currentRow() >= 0)
         self.open_button.setEnabled(not busy and self.table.currentRow() >= 0)
         self.content_button.setEnabled(not busy and self.table.currentRow() >= 0)
@@ -640,6 +733,8 @@ class MainWindow(QMainWindow):
                     self._graph_history.clear()
                 self._related_scope = self._pending_related_scope
             self._display_results(result, self._kind)
+        if self._kind == 'analysis':
+            self.refresh_workspace_status()
         if self._closing:
             self.close()
         elif graph_parent is not None:
@@ -695,8 +790,10 @@ class MainWindow(QMainWindow):
     @Slot()
     def update_preview(self):
         index = self.table.currentRow()
+        self.empty_hint.setVisible(not self._results)
         if 0 <= index < len(self._results):
             result = self._results[index]
+            self.document_title.setText(result.get('name') or Path(result['path']).name)
             text = format_analysis_detail(result) if self._view_mode == "details" else result["snippet"] or ""
             if self._view_mode != "details" and result.get("match_source"):
                 text = f"일치 위치: {MATCH_SOURCE_LABELS[result['match_source']]}\n\n{text}"
@@ -711,6 +808,7 @@ class MainWindow(QMainWindow):
             self.related_button.setEnabled(self.worker is None)
         else:
             self.preview.clear()
+            self.document_title.setText("문서 미리보기")
             self.selected_path.setText("선택된 파일 없음")
             self.open_button.setEnabled(False)
             self.content_button.setEnabled(False)
@@ -855,6 +953,11 @@ class MainWindow(QMainWindow):
             self._closing = True
             self.cancel_task()
             event.ignore()
+        elif self.scope_worker is not None:
+            self._closing = True
+            self._scope_timer.stop()
+            self.scope_worker.cancel_event.set()
+            event.ignore()
         elif self.ai_dialog is not None and self.ai_dialog.worker is not None:
             self._closing = True
             self.ai_dialog.close()
@@ -864,10 +967,12 @@ class MainWindow(QMainWindow):
             self.content_dialog.close()
             event.ignore()
         else:
+            self._closing = True
             if self.ai_dialog is not None:
                 self.ai_dialog.close()
             if self.graph_dialog is not None:
                 self.graph_dialog.close()
+            self._scope_timer.stop()
             self._settings_timer.stop()
             self._save_settings()
             event.accept()
