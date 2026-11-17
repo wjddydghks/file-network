@@ -44,7 +44,7 @@ def test_only_core_actions_and_auto_whole_area_preparation(application,graph_win
     assert '새 전송 2개' in dialog.plan_summary.text()
     assert '외부 호출 없음' in dialog.status.text()
     assert not hasattr(dialog,'question') and not hasattr(dialog,'chunk')
-    assert dialog.plan.calls==2
+    assert dialog.plan.calls==3
 
 
 def test_node_edge_file_list_body_original_and_cache_reopen(application,graph_window,monkeypatch):
@@ -52,7 +52,7 @@ def test_node_edge_file_list_body_original_and_cache_reopen(application,graph_wi
     provider=Provider();monkeypatch.setattr(transport,'_request',provider)
     approve(dialog);dialog.run.click()
     wait_until(application,lambda:dialog.worker is None)
-    assert len(provider.calls)==2 and dialog.state['complete']
+    assert len(provider.calls)==3 and dialog.state['complete']
     assert dialog.tabs.currentIndex()==0
     dialog.graph.selector.setCurrentIndex(dialog.graph.selector.findData('C1'))
     assert dialog.table.rowCount()==2
@@ -72,7 +72,7 @@ def test_node_edge_file_list_body_original_and_cache_reopen(application,graph_wi
     view.knowledge_button.click();second=view.knowledge_dialog
     wait_until(application,lambda:second.plan is not None and second.worker is None)
     assert second.plan.calls==0 and second.state['complete']
-    assert len(provider.calls)==2
+    assert len(provider.calls)==3
     assert not second.key.text() and not second.enabled.isChecked()
     second.close();wait_until(application,lambda:view.knowledge_dialog is None)
 
@@ -87,7 +87,7 @@ def test_file_change_on_prepare_invalidates_cache_and_uses_new_scope(application
     assert len(dialog.plan.documents)==5 and dialog.plan.calls>0
     assert dialog.state is None
     assert all(n['id'].startswith('status:') for n in dialog.graph.nodes)
-    assert len(provider.calls)==2
+    assert len(provider.calls)==3
     assert not dialog.approve.isChecked()
 
 
@@ -99,9 +99,9 @@ def test_call_budget_pauses_then_resumes_without_catalog_replay(application,grap
     assert not dialog.state['complete'] and len(provider.calls)==1
     assert '호출 상한' in dialog.status.text()
     dialog.prepare.click();wait_until(application,lambda:dialog.plan is not None and dialog.worker is None)
-    assert dialog.plan.calls==1
+    assert dialog.plan.calls==2
     approve(dialog);dialog.run.click();wait_until(application,lambda:dialog.worker is None)
-    assert dialog.state['complete'] and len(provider.calls)==2
+    assert dialog.state['complete'] and len(provider.calls)==3
 
 
 @pytest.mark.parametrize('change',['interest','model','budget','key'])
@@ -143,3 +143,47 @@ def test_preview_changed_version_gives_current_workflow_recovery(application,gra
     run_content_analysis(root)
     dialog.preview.click();wait_until(application,lambda:dialog.worker is None)
     assert not dialog.body.toPlainText() and '영역 분석 준비' in dialog.status.text()
+
+
+def test_interest_drilldown_and_statuses_stay_outside_graph(application,graph_window,monkeypatch):
+    _,_,dialog=graph_window
+    monkeypatch.setattr(transport,'_request',Provider())
+    approve(dialog);dialog.run.click();wait_until(application,lambda:dialog.worker is None)
+    graph=dialog.graph
+    assert [n['id'] for n in graph.visible_nodes]==['I1']
+    assert '전송 차단 1개' in graph.status_counts.text()
+    assert all(not n['id'].startswith('status:') for n in graph.visible_nodes)
+    graph.selector.setCurrentIndex(graph.selector.findData('I1'))
+    assert dialog.table.rowCount()==2
+    assert {n['id'] for n in graph.visible_nodes}=={'I1','C1','C2'}
+    import gc
+    gc.collect();application.processEvents()
+    texts=[item.toPlainText() for item in graph.scene.items() if hasattr(item,'toPlainText')]
+    assert {'프로젝트 관리','일정','예산','2개 파일'}.issubset(texts)
+    assert '프로젝트 관리' in graph.breadcrumb.text()
+    assert '프로젝트 관리 →' in dialog.reason.toPlainText()
+    hierarchy=next(e for e in graph.edges if e['kind']=='hierarchy' and e['target']=='C2')
+    graph.selector.setCurrentIndex(graph.selector.findData(hierarchy['id']))
+    assert set(d.file_id for d in dialog.page_documents)==set(hierarchy['files'])
+    assert '세부 주제' in dialog.node_title.text()
+    graph.back.click()
+    assert graph.selector.currentData()=='all'
+    assert [n['id'] for n in graph.visible_nodes]==['I1']
+    graph.selector.setCurrentIndex(graph.selector.findData('status:blocked'))
+    assert dialog.table.rowCount()==1 and dialog.selected_document().blocked
+    assert [n['id'] for n in graph.visible_nodes]==['I1']
+
+
+def test_mouse_click_drills_down_without_deleting_active_event_item(application,graph_window,monkeypatch):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    _,_,dialog=graph_window
+    monkeypatch.setattr(transport,'_request',Provider())
+    approve(dialog);dialog.run.click();wait_until(application,lambda:dialog.worker is None)
+    graph=dialog.graph
+    root=next(item for item in graph.scene.items() if item.data(0)=='I1')
+    point=graph.canvas.mapFromScene(root.sceneBoundingRect().center())
+    QTest.mouseClick(graph.canvas.viewport(),Qt.MouseButton.LeftButton,pos=point)
+    wait_until(application,lambda:graph.focus=='I1')
+    assert {n['id'] for n in graph.visible_nodes}=={'I1','C1','C2'}
+    assert dialog.table.rowCount()==2

@@ -88,7 +88,9 @@ def run_smoke():
                 def sample_quote(doc):
                     return next((part.strip() for part in doc.sample.split('[발췌 경계]') if part.strip()), '')[:100].strip()
                 quote = sample_quote(first)
-                state['topics'] = [{'id':'C1','label':'검증 자료','description':'패키지 자체 검증의 로컬 자료', 'file':first.alias,'quote':quote}]
+                state['summaries'] = {d.alias:{'summary':'패키지 실행 검증','keywords':['패키지 실행 검증'],'quote':sample_quote(d)} for d in kg.plan.eligible}
+                state['interests'] = [{'id':'I1','label':'패키지 검증','description':'설치와 실행 검증'}]
+                state['topics'] = [{'id':'C1','parent':'I1','label':'실행 검증 자료','description':'패키지 자체 검증의 로컬 자료', 'sources':[d.alias for d in kg.plan.eligible]}]
                 state['assignments'] = {d.alias:[{'category':'C1','reason':'자체 검증 자료입니다.', 'quote':sample_quote(d)}] for d in kg.plan.eligible}
                 state['complete'] = True
                 validate_state(state,kg.plan)

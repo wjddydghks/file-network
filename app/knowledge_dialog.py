@@ -13,7 +13,7 @@ from app.analyze_content import run_content_analysis
 from app.analysis_details import STATUS_LABELS
 from app.knowledge_graph_view import KnowledgeGraphView
 from core.ai_questions import DEFAULT_MODEL, POLICY_URL
-from core.knowledge_graph import CATALOG_PROMPT, CLASSIFY_PROMPT
+from core.knowledge_graph import CATALOG_PROMPT, CLASSIFY_PROMPT, SUMMARY_PROMPT, REDUCE_PROMPT
 from database import knowledge
 from database.document_chunks import get_document_chunk
 from services.knowledge_graph import prepare_knowledge, run_knowledge
@@ -22,7 +22,7 @@ PAGE_SIZE = 80
 POLICY = ('선택 영역의 파일을 자동으로 준비한 대표 본문과 관심사로 분류합니다. 이름·경로·실제 파일 ID는 별도로 보내지 않습니다. '
     '본문 자체의 식별정보는 포함될 수 있고 민감정보 자동 탐지는 완전하지 않습니다. OpenAI API는 유료이며 기본적으로 학습에 사용되지 않지만 '
     '악용 방지 로그는 통상 최대 30일 보관될 수 있습니다. store=false가 무보관을 보장하지 않습니다. '
-    '새 관심사 목록은 다음 파일 분류 요청에 재사용합니다. 전송할 파일·본문과 호출 상한을 확인하세요. 정책: ' + POLICY_URL)
+    '모든 전송 가능 파일을 요약하고, 전체 요약을 단계적으로 통합해 큰 관심사·세부 주제를 만듭니다. 요약·주제는 후속 요청에 재사용합니다. 전송할 파일·본문과 호출 상한을 확인하세요. 정책: ' + POLICY_URL)
 
 
 def label(text=''):
@@ -96,12 +96,12 @@ class KnowledgeDialog(QDialog):
         inner=QSplitter(Qt.Orientation.Horizontal);inner.addWidget(self.review_table);inner.addWidget(self.sample);inner.setSizes([650,520]);v.addWidget(inner,1)
         row=QHBoxLayout();row.addWidget(self.review_previous);row.addWidget(self.review_next);v.addLayout(row)
         self.instructions=QPlainTextEdit();self.instructions.setReadOnly(True);self.instructions.setMaximumHeight(90)
-        self.instructions.setPlainText('1. 대표 파일로 관심사 구성\n'+CATALOG_PROMPT+'\n\n2. 모든 전송 가능 파일을 16개씩 분류\n'+CLASSIFY_PROMPT)
+        self.instructions.setPlainText('1. 모든 전송 가능 파일 요약\n'+SUMMARY_PROMPT+'\n\n2. 전체 요약의 주제 통합\n'+REDUCE_PROMPT+'\n\n3. 큰 관심사·세부 주제 구성\n'+CATALOG_PROMPT+'\n\n4. 모든 파일 분류\n'+CLASSIFY_PROMPT)
         v.addWidget(self.instructions)
         row=QHBoxLayout();self.key=QLineEdit();self.key.setEchoMode(QLineEdit.EchoMode.Password);self.key.setMaxLength(1024)
         self.key.setPlaceholderText('OpenAI API 키 · 이 창에서만 사용 (비우면 OPENAI_API_KEY)')
         self.enabled=QCheckBox('외부 AI 사용 허용 · 유료')
-        self.max_calls=QSpinBox();self.max_calls.setRange(1,1000)
+        self.max_calls=QSpinBox();self.max_calls.setRange(1,10000)
         row.addWidget(self.key,1);row.addWidget(self.enabled);row.addWidget(label('이번 호출 상한'));row.addWidget(self.max_calls);v.addLayout(row)
         self.approve=QCheckBox('이 영역의 전송 대상·자동 준비 본문·호출 수를 확인했고 자동 일괄 분석에 동의합니다.')
         v.addWidget(self.approve)
@@ -115,7 +115,7 @@ class KnowledgeDialog(QDialog):
         layout=QVBoxLayout(self);layout.setContentsMargins(20,20,20,20);layout.setSpacing(12)
         row=QHBoxLayout();row.addWidget(self.path,1);row.addWidget(self.prepare);layout.addLayout(row)
         layout.addWidget(self.summary);layout.addWidget(self.tabs,1)
-        layout.addWidget(label('관심사 분류는 대표 본문 기준 AI 추정입니다. 연결은 두 관심사에 공통으로 분류된 파일을 뜻합니다. 파일 변경은 영역 분석 준비를 다시 누르면 로컬에서 확인합니다.'))
+        layout.addWidget(label('큰 관심사 → 세부 주제 → 파일로 탐색합니다. 실선은 상·하위 분류, 점선은 공통 파일입니다. 분류는 준비 본문 기준 AI 추정입니다. 파일 변경은 영역 분석 준비를 다시 누르면 로컬에서 확인합니다.'))
         row=QHBoxLayout();row.addWidget(self.status,1);row.addWidget(self.cancel);row.addWidget(self.close_button);layout.addLayout(row)
         for button in self.findChildren(QPushButton):button.setAutoDefault(False)
         self.update_buttons();QTimer.singleShot(0,lambda:self.prepare_area(initial=True))
@@ -157,7 +157,10 @@ class KnowledgeDialog(QDialog):
         if data['phase']=='prepare':self.status.setText(f"영역 준비 · 저장 파일 {data['files']:,}개 확인")
         elif data['phase']=='scan':self.status.setText(f"파일 확인 중 · {data['processed']:,}개")
         elif data['phase']=='analysis':self.status.setText(f"로컬 본문 준비 · {data['processed']:,}/{data['total']:,}개")
-        else:self.status.setText(f"자동 분류 · {data['done']:,}/{data['total']:,}개 · 이번 요청 {data['calls']}회 완료")
+        elif data['phase']=='reduce':self.status.setText(f"전체 요약 주제 통합 · {data['done']:,}배치 완료 · 이번 요청 {data['calls']}회 완료")
+        else:
+            phase={'summarize':'전체 파일 요약','reduce':'전체 요약 주제 통합','catalog':'큰 관심사·세부 주제 구성','classify':'파일 분류'}.get(data['phase'],'분석')
+            self.status.setText(f"{phase} · {data['done']:,}/{data['total']:,} · 이번 요청 {data['calls']}회 완료")
 
     def cancel_work(self):
         if self.worker is not None:
@@ -176,8 +179,8 @@ class KnowledgeDialog(QDialog):
             state=result.state();self.render_result(result,state)
             self.max_calls.setValue(max(1,result.calls));self.review_offset=0;self.render_review()
             remaining=len(result.remaining);blocked=sum(bool(d.blocked) for d in result.documents)
-            chars=sum(len(d.sample) for d in result.remaining)
-            self.plan_summary.setText(f"영역 전체 {len(result.documents):,}개 · 새 전송 {remaining:,}개 / {chars:,}자 · 차단 {blocked:,}개 · 최대 예정 {result.calls}회\n대표 본문은 파일당 최대 900자로 자동 준비합니다. 관심사 구성용 대표 파일은 한 번 더 전송될 수 있습니다. 같은 영역 상태에서 완료한 배치는 재전송하지 않습니다. 파일·관심사·모델이 바뀌면 새 분석이 필요합니다.")
+            chars=sum(len(d.sample) for d in result.unsummarized)
+            self.plan_summary.setText(f"영역 전체 {len(result.documents):,}개 · 새 전송 {remaining:,}개 · 새 요약 본문 {chars:,}자 · 차단 {blocked:,}개 · 최대 예정 {result.calls}회\n파일당 최대 900자 본문을 준비합니다. 모든 파일을 요약한 후 전체 요약에서 큰 관심사와 세부 주제를 구성하고 파일을 분류합니다. 본문은 요약·분류 단계에 각각 전송되며, 요약·통합 주제는 후속 요청에 재사용합니다. 같은 영역 상태에서 완료한 단계는 반복하지 않습니다. 파일·관심사·모델이 바뀌면 새 분석이 필요합니다.")
             if result.calls:
                 self.tabs.setCurrentIndex(1);self.status.setText('파일별 전송 본문과 호출 수를 확인하고 키·허용·동의 후 실행하세요. 아직 외부 호출 없음.')
             else:
@@ -187,7 +190,7 @@ class KnowledgeDialog(QDialog):
             updated=replace(plan,cached_json=knowledge.read_cache(plan.root,plan.interest,plan.model))
             state=updated.state();self.render_result(updated,state);self.tabs.setCurrentIndex(0)
             self.plan=None;self.approve.setChecked(False)
-            if outcome=='completed' and not result['topics'] and len(plan.eligible)>0:
+            if outcome=='completed' and result['topics']==[] and len(plan.eligible)>0:
                 self.status.setText('관심사를 도출하지 못했습니다. 관심사를 구체화해 다시 준비하세요. 파일을 분류한 것으로 표시하지 않습니다.')
             elif outcome=='completed':
                 self.status.setText('지식 그래프 저장 완료. 관심사 노드나 연결을 눌러 관련 파일을 확인하세요.' if result['complete'] else '이번 호출 상한까지 저장했습니다. 영역 분석 준비 후 남은 파일만 승인해 재개하세요.')
@@ -205,7 +208,10 @@ class KnowledgeDialog(QDialog):
         self.view_plan=plan;self.state=state
         done=len(state['assignments']) if state else 0
         complete=bool(state and state['complete'])
-        self.summary.setText(f"{plan.root}\n저장 파일 {len(plan.documents):,}개 · AI 분류 처리 {done:,}/{len(plan.eligible):,}개 · {'저장 결과' if complete else '분류 준비/진행 중'} · 관심사: {plan.interest or '자동 구성'}")
+        summarized=len(state['summaries']) if state else 0
+        roots=len(state['interests']) if state else 0
+        topics=len(state['topics'] or []) if state else 0
+        self.summary.setText(f"{plan.root}\n전체 {len(plan.documents):,}개 · 요약 {summarized:,}/{len(plan.eligible):,}개 → 관심사 {roots}개 / 세부 주제 {topics}개 → 분류 {done:,}/{len(plan.eligible):,}개 · {'저장 결과' if complete else '준비/진행 중'}")
         self.graph.render_graph(plan,state);self.file_offset=0;self.select_node('all')
         QTimer.singleShot(0,self.graph,self.graph.canvas.fit_graph)
 
@@ -241,7 +247,10 @@ class KnowledgeDialog(QDialog):
             texts=[]
             for member in memberships:
                 if self.selected_key.startswith('C') and member['category']!=self.selected_key:continue
-                title=next(t['label'] for t in self.state['topics'] if t['id']==member['category'])
+                topic=next(t for t in self.state['topics'] if t['id']==member['category'])
+                if self.selected_key.startswith('I') and topic['parent']!=self.selected_key:continue
+                parent=next(t['label'] for t in self.state['interests'] if t['id']==topic['parent'])
+                title=parent+' → '+topic['label']
                 texts.append(f"{title} · AI 분류\n{member['reason']}\n근거: {member['quote']}")
             self.reason.setPlainText('\n\n'.join(texts) or (doc.blocked if doc.blocked else '아직 AI 관심사로 분류되지 않은 파일입니다.'))
         self.update_buttons()
@@ -268,10 +277,11 @@ class KnowledgeDialog(QDialog):
     def render_review(self):
         docs=self.plan.documents if self.plan else ()
         done=self.plan.checkpoint['assignments'] if self.plan and self.plan.checkpoint else {}
+        summaries=self.plan.checkpoint['summaries'] if self.plan and self.plan.checkpoint else {}
         self.review_documents=docs[self.review_offset:self.review_offset+PAGE_SIZE]
         self.review_table.setRowCount(len(self.review_documents))
         for row,d in enumerate(self.review_documents):
-            status='전송 차단' if d.blocked else '저장 분류 재사용' if d.alias in done else '전송 예정' if d.eligible else '본문 없음'
+            status='전송 차단' if d.blocked else '저장 분류 재사용' if d.alias in done else '요약 저장 · 주제 통합/분류 예정' if d.alias in summaries else '요약·분류 전송 예정' if d.eligible else '본문 없음'
             for col,text in enumerate((d.path,status)):self.review_table.setItem(row,col,QTableWidgetItem(text))
         if self.review_documents:self.review_table.selectRow(0)
         self.show_review();self.update_buttons()

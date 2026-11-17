@@ -7,7 +7,8 @@ from types import SimpleNamespace
 
 from core.ai_questions import DEFAULT_MODEL
 from core.knowledge_graph import (BATCH_SIZE, KnowledgePlan, empty_state, payload,
-                                  validate_assignments, validate_config, validate_topics)
+                                  catalog_frontier, validate_assignments, validate_catalog, validate_config,
+                                  validate_groups, validate_summaries)
 from core.operations import check_cancelled
 from core.scanner.exclusions import validate_excluded_dirs
 from database import knowledge
@@ -33,25 +34,39 @@ def _decode(response, key):
         if choice['finish_reason'] != 'stop' or choice['message'].get('refusal'):
             raise ValueError()
         data = json.loads(choice['message']['content'])
-        if not isinstance(data, dict) or set(data) != {key}:
+        if not isinstance(data, dict) or set(data) != ({'interests','topics'} if key == 'catalog' else {key}):
             raise ValueError()
-        return data[key]
+        return data if key == 'catalog' else data[key]
     except (KeyError, IndexError, TypeError, ValueError, RecursionError):
         raise transport.AIServiceError('AI 분류 응답이 잘렸거나 형식이 올바르지 않습니다. 자동 재시도하지 않습니다.') from None
 
 
-def _call(plan, docs, topics, key, cancelled):
+def _call(plan, docs, key, cancelled, *, stage, topics=None, records=(), interests=()):
+    if records:
+        aliases = {alias for record in records for alias in record['aliases']}
+        docs = tuple(d for d in plan.eligible if d.alias in aliases)
     knowledge.verify_documents(docs, cancelled)
-    # segment=-1은 사용자가 고르는 번호가 아닌 자동 준비 본문임을 기록한다.
-    audit = SimpleNamespace(model=plan.model, sources=tuple(SimpleNamespace(file_id=d.file_id, segment=-1, text=d.sample) for d in docs))
+    request = payload(plan, docs, topics, stage=stage, records=records, interests=interests)
+    if records:
+        # Derived requests log their complete file provenance and actual derived-context size.
+        context = request['messages'][1]['content']
+        sources = tuple(SimpleNamespace(file_id=d.file_id, segment=-2, text=context if index == 0 else '')
+                        for index, d in enumerate(docs))
+    else:
+        sources = tuple(SimpleNamespace(file_id=d.file_id, segment=-1, text=d.sample) for d in docs)
+    audit = SimpleNamespace(model=plan.model, sources=sources)
     request_id = transport._audit_start(audit)
     try:
         check_cancelled(cancelled)
-        response = transport._request(payload(plan, docs, topics), key)
-        data = _decode(response, 'topics' if topics is None else 'assignments')
-        if topics is None:
-            validate_topics(data, docs)
-            knowledge.verify_quotes(docs, [(t['file'],t['quote']) for t in data])
+        response = transport._request(request, key)
+        data = _decode(response, {'summarize':'summaries','reduce':'groups','catalog':'catalog','classify':'assignments'}[stage])
+        if stage == 'summarize':
+            data = validate_summaries(data, docs)
+            knowledge.verify_quotes(docs, [(alias, row['quote']) for alias, row in data.items()])
+        elif stage == 'reduce':
+            validate_groups(data, records)
+        elif stage == 'catalog':
+            validate_catalog(data['interests'], data['topics'], records)
         else:
             data = validate_assignments(data, docs, topics)
             knowledge.verify_quotes(docs, [(alias,m['quote']) for alias,ms in data.items() for m in ms])
@@ -66,8 +81,8 @@ def _call(plan, docs, topics, key, cancelled):
 
 
 def run_knowledge(plan, approval_id, *, max_calls, api_key=None, enabled=False, is_cancelled=None, progress=None):
-    if type(max_calls) is not int or not 1 <= max_calls <= 1000:
-        raise ValueError('호출 상한은 1~1000 사이의 정수여야 합니다.')
+    if type(max_calls) is not int or not 1 <= max_calls <= 10000:
+        raise ValueError('호출 상한은 1~10000 사이의 정수여야 합니다.')
     if enabled is not True:
         raise ValueError('외부 AI 사용 허용과 전송 확인이 필요합니다.')
     if not isinstance(approval_id, str) or not approval_id.isascii() or not hmac.compare_digest(approval_id, plan.approval_id(max_calls)):
@@ -87,24 +102,54 @@ def run_knowledge(plan, approval_id, *, max_calls, api_key=None, enabled=False, 
     calls = 0
     try:
         knowledge.save(plan, token, state)
-        if not state['topics'] and plan.eligible:
-            check_cancelled(is_cancelled)
-            state['topics'] = _call(plan, plan.representatives, None, key, is_cancelled)
-            calls += 1
+        def checkpoint(phase, done, total):
             knowledge.save(plan, token, state)
+            if progress:
+                progress({'phase': phase, 'done': done, 'total': total, 'calls': calls})
+
+        # No taxonomy can be frozen until EVERY eligible file has contributed its summary.
+        remaining_summaries = [d for d in plan.eligible if d.alias not in state['summaries']]
+        for start in range(0, len(remaining_summaries), BATCH_SIZE):
+            if calls >= max_calls:
+                return state
+            check_cancelled(is_cancelled)
+            batch = remaining_summaries[start:start+BATCH_SIZE]
+            state['summaries'].update(_call(plan, batch, key, is_cancelled, stage='summarize'))
+            calls += 1
+            checkpoint('summarize', len(state['summaries']), len(plan.eligible))
         if not plan.eligible:
             state['topics'] = []
-        remaining = [d for d in plan.eligible if d.alias not in state['assignments']] if state['topics'] else []
+        elif not state['topics']:
+            # Bounded context; coverage is exhaustive at every level, including minority subjects.
+            while True:
+                check_cancelled(is_cancelled)
+                records, task, _ = catalog_frontier(plan, state)
+                if task is None:
+                    break
+                if calls >= max_calls:
+                    return state
+                # Requests contain derived summaries, not another copy of the source samples.
+                groups = _call(plan, (), key, is_cancelled, stage='reduce', records=records)
+                state['reductions'][task] = groups
+                calls += 1
+                checkpoint('reduce', len(state['reductions']), len(state['summaries']))
+            if calls >= max_calls:
+                return state
+            check_cancelled(is_cancelled)
+            data = _call(plan, (), key, is_cancelled, stage='catalog', records=records)
+            state['interests'], state['topics'] = data['interests'], data['topics']
+            calls += 1
+            checkpoint('catalog', len(state['topics']), len(state['topics']))
+        remaining = [d for d in plan.eligible if d.alias not in state['assignments']]
         for start in range(0, len(remaining), BATCH_SIZE):
             if calls >= max_calls:
                 break
             check_cancelled(is_cancelled)
             batch = remaining[start:start+BATCH_SIZE]
-            state['assignments'].update(_call(plan, batch, state['topics'], key, is_cancelled))
+            state['assignments'].update(_call(plan, batch, key, is_cancelled, stage='classify',
+                                             topics=state['topics'], interests=state['interests']))
             calls += 1
-            knowledge.save(plan, token, state)
-            if progress:
-                progress({'phase': 'classify', 'done': len(state['assignments']), 'total': len(plan.eligible), 'calls': calls})
+            checkpoint('classify', len(state['assignments']), len(plan.eligible))
         check_cancelled(is_cancelled)
         if knowledge.read_documents(plan.root, is_cancelled,excluded_dirs=plan.excluded_dirs) != plan.documents:
             raise ValueError('분석 중 영역의 저장 파일이 변경되었습니다. 다시 준비하세요.')

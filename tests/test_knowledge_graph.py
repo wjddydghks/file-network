@@ -35,16 +35,24 @@ class Provider:
     def __call__(self,request,key):
         self.calls.append(request)
         data=json.loads(request['messages'][1]['content'])
-        if 'representative_files' in data:
-            first=data['representative_files'][0]
-            quote=first['sample'].split('[발췌 경계]')[0].strip()[:25].strip()
-            return response({'topics':[{'id':'C1','label':'일정','description':'프로젝트 일정 관련 파일','file':first['file'],'quote':quote},
-                {'id':'C2','label':'예산','description':'예산 검토 관련 파일','file':first['file'],'quote':quote}]})
+        name=request['response_format']['json_schema']['name']
+        if name=='knowledge_summaries':
+            return response({'summaries':[{'file':f['file'],'summary':f['sample'].split('[발췌 경계]')[0].strip()[:100],
+                'keywords':['프로젝트 일정'], 'quote':next(p.strip()[:25].strip() for p in f['sample'].split('[발췌 경계]') if p.strip())} for f in data['files']]})
+        if name=='knowledge_consolidation':
+            records=data['records']
+            return response({'groups':[{'label':'프로젝트 관리','description':'프로젝트 일정과 예산', 'members':[r['id'] for r in records]}]})
+        if name=='knowledge_hierarchy':
+            records=data['records'];count=min(2,len(records))
+            return response({'interests':[{'id':'I1','label':'프로젝트 관리','description':'프로젝트 실행과 관리'}],
+                'topics':[{'id':f'C{i+1}','parent':'I1','label':['일정','예산'][i],
+                    'description':['프로젝트 일정 관련 파일','예산 검토 관련 파일'][i],
+                    'sources':[r['id'] for r in records[i::count]]} for i in range(count)]})
         assignments=[]
         for index,file in enumerate(data['files']):
             quote=file['sample'].split('[발췌 경계]')[0].strip()[:25].strip()
             memberships=[{'category':'C1','reason':'본문에서 일정 검토를 다룹니다.','quote':quote}]
-            if index%2==0:memberships.append({'category':'C2','reason':'예산과도 관련된 자료입니다.','quote':quote})
+            if index%2==0 and len(data['topics'])>1:memberships.append({'category':'C2','reason':'예산과도 관련된 자료입니다.','quote':quote})
             assignments.append({'file':file['file'],'memberships':memberships})
         return response({'assignments':assignments})
 
@@ -57,7 +65,7 @@ def execute(plan,calls=None,**options):
 def test_whole_scope_automatic_samples_and_blocked_files(area):
     plan=prepare_knowledge(area)
     assert len(plan.documents)==5 and len(plan.eligible)==3
-    assert plan.calls==2
+    assert plan.calls==3
     assert any(d.blocked for d in plan.documents)
     assert not any(d.name=='unsupported.bin' for d in plan.eligible)
     assert not db.DB_PATH.with_name('knowledge_graph.json').exists()
@@ -76,7 +84,7 @@ def test_full_classification_cache_and_no_sensitive_data_sent(area,monkeypatch):
     provider=Provider();monkeypatch.setattr(transport,'_request',provider)
     plan=prepare_knowledge(area)
     state=execute(plan)
-    assert state['complete'] and len(state['assignments'])==3 and len(provider.calls)==2
+    assert state['complete'] and len(state['assignments'])==3 and len(provider.calls)==3
     sent=json.dumps(provider.calls,ensure_ascii=False)
     assert str(area) not in sent and 'blocked.txt' not in sent and 'user@example.com' not in sent
     loaded=prepare_knowledge(area)
@@ -94,7 +102,7 @@ def test_multiple_batches_pause_and_resume_do_not_resend_completed(area,monkeypa
     run_content_analysis(area)
     provider=Provider();monkeypatch.setattr(transport,'_request',provider)
     first=prepare_knowledge(area)
-    paused=execute(first,2)
+    paused=execute(first,(len(first.eligible)+BATCH_SIZE-1)//BATCH_SIZE+2)
     assert not paused['complete'] and len(paused['assignments'])==BATCH_SIZE
     old=set(paused['assignments']);sent_before=len(provider.calls)
     resumed=prepare_knowledge(area)
@@ -141,7 +149,8 @@ def test_cancel_after_batch_persists_and_can_resume(area,monkeypatch):
     run_content_analysis(area)
     provider=Provider();monkeypatch.setattr(transport,'_request',provider)
     plan=prepare_knowledge(area);cancel=Event()
-    def progress(data):cancel.set()
+    def progress(data):
+        if data['phase']=='classify':cancel.set()
     with pytest.raises(OperationCancelled):execute(plan,is_cancelled=cancel.is_set,progress=progress)
     resumed=prepare_knowledge(area)
     assert len(resumed.state()['assignments'])==BATCH_SIZE
@@ -153,7 +162,7 @@ def test_invalid_batch_does_not_save_partial_or_retry(area,monkeypatch,bad):
     provider=Provider()
     def request(payload,key):
         reply=provider(payload,key)
-        if 'files' not in json.loads(payload['messages'][1]['content']):return reply
+        if payload['response_format']['json_schema']['name']!='knowledge_memberships':return reply
         data=json.loads(reply['choices'][0]['message']['content'])
         if bad=='missing':data['assignments'].pop()
         elif bad=='duplicate':data['assignments'][1]['file']=data['assignments'][0]['file']
@@ -170,7 +179,7 @@ def test_invalid_batch_does_not_save_partial_or_retry(area,monkeypatch,bad):
     with pytest.raises((ValueError,transport.AIServiceError)):execute(plan)
     state=prepare_knowledge(area).state()
     assert not state['complete'] and state['assignments']=={}
-    assert len(provider.calls)==2
+    assert len(provider.calls)==3
     assert audit_rows()[-1]['status']=='failed_or_unknown'
 
 
@@ -200,32 +209,41 @@ def test_all_files_beyond_old_page_limit_are_classified(area,monkeypatch):
     run_content_analysis(area)
     provider=Provider();monkeypatch.setattr(transport,'_request',provider)
     plan=prepare_knowledge(area);state=execute(plan)
-    classified=[f['file'] for r in provider.calls for f in json.loads(r['messages'][1]['content']).get('files',[])]
+    classified=[f['file'] for r in provider.calls if r['response_format']['json_schema']['name']=='knowledge_memberships' for f in json.loads(r['messages'][1]['content'])['files']]
     assert len(classified)==len(plan.eligible)>80
     assert set(classified)=={d.alias for d in plan.eligible}
     assert state['complete']
 
 
-@pytest.mark.parametrize('mode',['unknown_file','fake_quote','duplicate_topic','sensitive_label'])
+@pytest.mark.parametrize('mode',['unknown_source','missing_source','duplicate_topic','sensitive_label'])
 def test_invalid_taxonomy_never_reaches_file_classification(area,monkeypatch,mode):
     provider=Provider()
     def request(payload,key):
-        reply=provider(payload,key);data=json.loads(reply['choices'][0]['message']['content'])
-        if mode=='unknown_file':data['topics'][0]['file']='F99999'
-        elif mode=='fake_quote':data['topics'][0]['quote']='찾을 수 없는 문장'
+        reply=provider(payload,key)
+        if payload['response_format']['json_schema']['name']!='knowledge_hierarchy':return reply
+        data=json.loads(reply['choices'][0]['message']['content'])
+        if mode=='unknown_source':data['topics'][0]['sources']=['F99999']
+        elif mode=='missing_source':data['topics'].pop()
         elif mode=='duplicate_topic':data['topics'][1]['id']='C1'
         else:data['topics'][0]['label']='user@example.com'
         return response(data)
     monkeypatch.setattr(transport,'_request',request)
     with pytest.raises(ValueError):execute(prepare_knowledge(area))
-    assert len(provider.calls)==1
+    assert len(provider.calls)==2
     assert prepare_knowledge(area).state()['topics'] is None
 
 
 def test_no_topics_does_not_pretend_all_files_were_classified(area,monkeypatch):
-    calls=[];monkeypatch.setattr(transport,'_request',lambda *a:calls.append(a) or response({'topics':[]}))
-    plan=prepare_knowledge(area);state=execute(plan)
-    assert len(calls)==1 and not state['complete'] and not state['assignments']
+    provider=Provider()
+    def request(payload,key):
+        reply=provider(payload,key)
+        if payload['response_format']['json_schema']['name']=='knowledge_hierarchy':return response({'interests':[],'topics':[]})
+        return reply
+    monkeypatch.setattr(transport,'_request',request)
+    plan=prepare_knowledge(area)
+    with pytest.raises(ValueError):execute(plan)
+    state=prepare_knowledge(area).state()
+    assert len(provider.calls)==2 and not state['complete'] and not state['assignments']
     assert any(n['id']=='status:waiting' for n in graph_nodes(plan,state))
     assert prepare_knowledge(area).calls>0
 
@@ -252,3 +270,133 @@ def test_excluded_previously_indexed_folder_never_transmitted(area,monkeypatch):
     assert execute(plan)['complete']
     assert 'not for external processing' not in json.dumps(provider.calls)
     assert excluded.file_id in next(n for n in graph_nodes(plan,prepare_knowledge(area,excluded_dirs=['private']).state()) if n['id']=='status:blocked')['files']
+
+
+@pytest.mark.parametrize('bad',['missing','duplicate','fake_quote','sensitive_summary','generic_keyword'])
+def test_invalid_document_summary_never_creates_taxonomy(area,monkeypatch,bad):
+    provider=Provider()
+    def request(payload,key):
+        reply=provider(payload,key)
+        data=json.loads(reply['choices'][0]['message']['content'])
+        rows=data['summaries']
+        if bad=='missing':rows.pop()
+        elif bad=='duplicate':rows[1]['file']=rows[0]['file']
+        elif bad=='fake_quote':rows[0]['quote']='본문에 없는 인용'
+        elif bad=='sensitive_summary':rows[0]['summary']='연락 user@example.com'
+        else:rows[0]['keywords']=[]
+        return response(data)
+    monkeypatch.setattr(transport,'_request',request)
+    with pytest.raises(ValueError):execute(prepare_knowledge(area))
+    state=prepare_knowledge(area).state()
+    assert state['summaries']=={} and state['topics'] is None
+    assert len(provider.calls)==1
+
+
+def test_taxonomy_waits_for_every_summary_and_resume_reuses_them(area,monkeypatch):
+    for i in range(40):(area/f'extra{i:03}.txt').write_text('프로젝트 일정 예산 자료',encoding='utf-8')
+    run_content_analysis(area)
+    provider=Provider();monkeypatch.setattr(transport,'_request',provider)
+    first=prepare_knowledge(area)
+    partial=execute(first,1)
+    assert len(partial['summaries'])==BATCH_SIZE
+    assert partial['topics'] is None and not partial['assignments']
+    old=set(partial['summaries'])
+    execute(prepare_knowledge(area))
+    stages=[r['response_format']['json_schema']['name'] for r in provider.calls]
+    assert stages[:3]==['knowledge_summaries']*3
+    assert stages[3]=='knowledge_hierarchy'
+    resent=[f['file'] for r in provider.calls[1:] if r['response_format']['json_schema']['name']=='knowledge_summaries'
+            for f in json.loads(r['messages'][1]['content'])['files']]
+    assert not old.intersection(resent)
+    catalog=json.loads(provider.calls[3]['messages'][1]['content'])
+    assert {r['id'] for r in catalog['records']}=={d.alias for d in first.eligible}
+
+
+class SubjectProvider(Provider):
+    """Mocks semantic grouping; assertions check coverage/provenance, not model quality."""
+    def __call__(self,request,key):
+        name=request['response_format']['json_schema']['name']
+        if name=='knowledge_summaries':return super().__call__(request,key)
+        self.calls.append(request)
+        data=json.loads(request['messages'][1]['content'])
+        if name in ('knowledge_consolidation','knowledge_hierarchy'):
+            astro=[r['id'] for r in data['records'] if '천체' in r['summary']]
+            project=[r['id'] for r in data['records'] if r['id'] not in astro]
+            parts=[(name,ids) for name,ids in [('프로젝트 일정',project),('천체 스펙트럼',astro)] if ids]
+            if name=='knowledge_consolidation':
+                return response({'groups':[{'label':label,'description':label+'에 관한 자료','members':ids} for label,ids in parts]})
+            return response({'interests':[{'id':f'I{i+1}','label':label,'description':label+' 연구와 관리'} for i,(label,_) in enumerate(parts)],
+                'topics':[{'id':f'C{i+1}','parent':f'I{i+1}','label':label+' 분석','description':label+'에 관한 파일','sources':ids}
+                          for i,(label,ids) in enumerate(parts)]})
+        return response({'assignments':[{'file':f['file'],'memberships':[{'category':'C2' if '천체' in f['sample'] else 'C1',
+                'reason':'본문에서 해당 주제를 다룹니다.','quote':f['sample'][:25].strip()}]} for f in data['files']]})
+
+
+def test_all_summary_coverage_preserves_minority_subject_through_reduction(area,monkeypatch):
+    for i in range(90):(area/f'extra{i:03}.txt').write_text('프로젝트 일정 예산 자료',encoding='utf-8')
+    rare=area/'extra043b.txt';rare.write_text('천체 스펙트럼과 적색편이 연구 자료',encoding='utf-8')
+    run_content_analysis(area)
+    provider=SubjectProvider();monkeypatch.setattr(transport,'_request',provider)
+    plan=prepare_knowledge(area)
+    summary_calls=(len(plan.eligible)+BATCH_SIZE-1)//BATCH_SIZE
+    paused=execute(plan,summary_calls+1)
+    assert len(paused['summaries'])==len(plan.eligible) and len(paused['reductions'])==1
+    assert paused['topics'] is None
+    old_calls=len(provider.calls)
+    resumed=prepare_knowledge(area);done=execute(resumed)
+    assert done['complete'] and len(done['interests'])==2
+    assert all(r['response_format']['json_schema']['name']!='knowledge_summaries' for r in provider.calls[old_calls:])
+    catalog=next(json.loads(r['messages'][1]['content']) for r in provider.calls if r['response_format']['json_schema']['name']=='knowledge_hierarchy')
+    assert sum(r['count'] for r in catalog['records'])==len(plan.eligible)
+    assert any('천체' in r['summary'] for r in catalog['records'])
+    rare_doc=next(d for d in plan.eligible if d.path==str(rare))
+    nodes=graph_nodes(resumed,done)
+    assert next(n for n in nodes if n['id']=='I2')['files']==[rare_doc.file_id]
+    assert done['assignments'][rare_doc.alias][0]['category']=='C2'
+    sent=json.dumps(provider.calls,ensure_ascii=False)
+    assert str(area) not in sent
+    assert all('aliases' not in record for request in provider.calls for record in json.loads(request['messages'][1]['content']).get('records',[]))
+    assert any(any(s['segment']==-2 for s in json.loads(row['targets'])) for row in audit_rows())
+
+
+def test_recursive_reduction_covers_every_input_at_multiple_levels():
+    from core.knowledge_graph import Document, KnowledgePlan, catalog_frontier, validate_state
+    docs=tuple(Document(f'F{i}',i,f'/local/{i}',str(i),'EXTRACTED','revision','주제 근거 본문','') for i in range(4200))
+    plan=KnowledgePlan('/local','','gpt-4.1-mini',docs)
+    state=empty_state(plan)
+    state['summaries']={d.alias:{'summary':'주제 근거 요약','keywords':['주제 근거'],'quote':'주제 근거'} for d in docs}
+    levels=set()
+    while True:
+        records,task,_=catalog_frontier(plan,state)
+        if task is None:break
+        levels.add(task.split(':')[0])
+        count=min(12,len(records))
+        state['reductions'][task]=[{'label':f'연구 주제 {i}','description':f'연구 분야 {i}',
+            'members':[r['id'] for r in records[i::count]]} for i in range(count)]
+    assert len(levels)>=2 and len(records)<=64
+    assert sum(r['count'] for r in records)==len(docs)
+    aliases=[alias for record in records for alias in record['aliases']]
+    assert len(aliases)==len(set(aliases))==len(docs)
+    validate_state(state,plan)
+
+
+@pytest.mark.parametrize('mode',['missing','duplicate','unknown','generic'])
+def test_reduction_rejects_lost_duplicate_or_vague_subjects(mode):
+    from core.knowledge_graph import validate_groups
+    records=[{'id':'F1'},{'id':'F2'}]
+    groups=[{'label':'천체 관측','description':'스펙트럼 관측 연구','members':['F1','F2']}]
+    if mode=='missing':groups[0]['members'].pop()
+    elif mode=='duplicate':groups[0]['members'].append('F1')
+    elif mode=='unknown':groups[0]['members'][0]='F999'
+    else:groups[0]['label']='일반 자료'
+    with pytest.raises(ValueError):validate_groups(groups,records)
+
+
+def test_old_flat_taxonomy_cache_is_not_reused(area,monkeypatch):
+    plan=prepare_knowledge(area)
+    old=empty_state(plan);old['version']=1
+    token=knowledge.acquire(plan)
+    try:knowledge.save(plan,token,old)
+    finally:knowledge.release(plan,token)
+    current=prepare_knowledge(area)
+    assert current.state() is None and current.calls==3
