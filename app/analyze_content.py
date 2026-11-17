@@ -53,13 +53,20 @@ def run_content_analysis(root_path, max_bytes=DEFAULT_MAX_BYTES, is_cancelled=No
             progress_callback({"phase": "analysis", "processed": sum(counts.values()), "total": len(files)})
 
     report_progress()
-    for file in files:
+    states = {}
+    batch_size = file_contents.CONTENT_STATE_BATCH_SIZE
+    for index, file in enumerate(files):
         check_cancelled(is_cancelled)
+        if index % batch_size == 0:
+            states = file_contents.get_content_states([
+                item['id'] for item in files[index:index + batch_size]
+            ])
+            check_cancelled(is_cancelled)
         path = Path(file["path"])
         fingerprint = None
         try:
             fingerprint = source_fingerprint(path, max_bytes, text_encoding)
-            previous = file_contents.get_content_state(file["id"])
+            previous = states.get(file["id"])
             if (
                 previous
                 and previous["status"] in {"EXTRACTED", "SKIPPED"}
