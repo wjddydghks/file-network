@@ -4,7 +4,7 @@ from pathlib import Path
 from threading import Event
 
 try:
-    from PySide6.QtCore import Qt, QThread, QUrl, Signal, Slot
+    from PySide6.QtCore import Qt, QStandardPaths, QThread, QTimer, QUrl, Signal, Slot
     from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut, QTextCursor, QTextDocument
     from PySide6.QtWidgets import (
         QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QHBoxLayout, QHeaderView, QLabel,
@@ -20,6 +20,7 @@ except ImportError as error:
 
 from app.analyze_content import run_content_analysis
 from app.analysis_details import STATUS_LABELS, format_analysis_detail, reason_label
+from app.gui_settings import GuiSettings, load_settings, save_settings
 from core.operations import check_cancelled
 from database.content_search import search_content
 from database.file_search import search_filename
@@ -27,6 +28,11 @@ from database.unified_search import search_all
 from database.file_contents import MAX_PREVIEW_CHARS, get_content_preview, list_analysis_results
 
 MATCH_SOURCE_LABELS = {"content": "본문", "name": "파일명"}
+
+
+def default_settings_path():
+    directory = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.GenericConfigLocation)
+    return (Path(directory) if directory else Path.home() / '.config') / 'file-network' / 'gui-settings.json'
 
 
 class ContentPreviewDialog(QDialog):
@@ -207,7 +213,7 @@ class TaskThread(QThread):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, settings_path=None):
         super().__init__()
         self.setWindowTitle("File Network — 로컬 파일 검색")
         self.resize(1000, 720)
@@ -219,6 +225,8 @@ class MainWindow(QMainWindow):
         self._view_mode = "search"
         self._search_target = "content"
         self.content_dialog = None
+        self.settings_path = Path(settings_path) if settings_path is not None else default_settings_path()
+        self._saved_settings, settings_notice = load_settings(self.settings_path)
 
         self.folder = QLineEdit()
         self.folder.setPlaceholderText("분석하거나 검색할 폴더를 선택하세요")
@@ -269,11 +277,15 @@ class MainWindow(QMainWindow):
             self.analysis_filter.addItem(label, status)
         self.details_button = QPushButton("분석 내역 보기")
         self.details_button.clicked.connect(self.start_details)
+        self.reset_settings_button = QPushButton("설정 초기화")
+        self.reset_settings_button.setToolTip("저장된 화면 설정만 기본값으로 되돌립니다.")
+        self.reset_settings_button.clicked.connect(self.reset_settings)
         details_row = QHBoxLayout()
         details_row.addWidget(QLabel("파일별 분석 상태"))
         details_row.addWidget(self.analysis_filter)
         details_row.addWidget(self.details_button)
         details_row.addStretch(1)
+        details_row.addWidget(self.reset_settings_button)
 
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(["파일명", "경로", "일치 본문"])
@@ -310,6 +322,9 @@ class MainWindow(QMainWindow):
         self.status = QLabel("폴더를 선택해 분석한 뒤 본문을 검색하세요. 이미 분석한 폴더는 바로 검색할 수 있습니다.")
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         self.status.setWordWrap(True)
+        self.settings_status = QLabel(self)
+        self.settings_status.setTextFormat(Qt.TextFormat.PlainText)
+        self.settings_status.setWordWrap(True)
 
         layout = QVBoxLayout()
         layout.addLayout(folder_row)
@@ -319,9 +334,70 @@ class MainWindow(QMainWindow):
         layout.addLayout(open_row)
         layout.addWidget(self.progress)
         layout.addWidget(self.status)
+        layout.addWidget(self.settings_status)
         central = QWidget()
         central.setLayout(layout)
         self.setCentralWidget(central)
+        self._apply_settings(self._saved_settings)
+        self._settings_notice(settings_notice)
+        self._settings_timer = QTimer(self)
+        self._settings_timer.setSingleShot(True)
+        self._settings_timer.setInterval(300)
+        self._settings_timer.timeout.connect(self._save_settings)
+        self.folder.editingFinished.connect(self._schedule_settings)
+        self.browse.clicked.connect(self._schedule_settings)
+        for combo in (self.text_encoding, self.search_target, self.analysis_filter):
+            combo.currentIndexChanged.connect(self._schedule_settings)
+        for spin in (self.max_size, self.limit):
+            spin.valueChanged.connect(self._schedule_settings)
+        self.all_folders.toggled.connect(self._schedule_settings)
+
+    def _settings_notice(self, message):
+        self.settings_status.setText(message or '')
+        self.settings_status.setVisible(bool(message))
+
+    def _apply_settings(self, settings):
+        self.folder.setText(settings.folder)
+        self.max_size.setValue(settings.max_size_mib)
+        self.text_encoding.setCurrentIndex(self.text_encoding.findData(settings.text_encoding))
+        self.search_target.setCurrentIndex(self.search_target.findData(settings.search_target))
+        self.all_folders.setChecked(settings.all_folders)
+        self.limit.setValue(settings.result_limit)
+        self.analysis_filter.setCurrentIndex(self.analysis_filter.findData(settings.analysis_filter))
+
+    def _current_settings(self):
+        return GuiSettings(
+            folder=self.folder.text(), max_size_mib=self.max_size.value(),
+            text_encoding=self.text_encoding.currentData(), search_target=self.search_target.currentData(),
+            all_folders=self.all_folders.isChecked(), result_limit=self.limit.value(),
+            analysis_filter=self.analysis_filter.currentData(),
+        )
+
+    @Slot()
+    def _schedule_settings(self):
+        self._settings_timer.start()
+
+    @Slot()
+    def _save_settings(self, force=False):
+        settings = self._current_settings()
+        if not force and settings == self._saved_settings:
+            return
+        try:
+            save_settings(self.settings_path, settings)
+        except (OSError, ValueError) as error:
+            self._settings_notice(f'설정 저장 실패 — 현재 화면은 계속 사용할 수 있습니다: {error}')
+        else:
+            self._saved_settings = settings
+            self._settings_notice(None)
+
+    @Slot()
+    def reset_settings(self):
+        if self.worker is not None:
+            return
+        self._apply_settings(GuiSettings())
+        self._settings_timer.stop()
+        self._save_settings(force=True)
+        self.status.setText("화면 설정을 기본값으로 되돌렸습니다.")
 
     @Slot()
     def select_folder(self):
@@ -412,7 +488,7 @@ class MainWindow(QMainWindow):
         self.worker.start()
 
     def _set_busy(self, busy):
-        for widget in (self.folder, self.browse, self.max_size, self.text_encoding, self.analyze, self.query, self.search_target, self.all_folders, self.limit, self.search, self.table, self.analysis_filter, self.details_button):
+        for widget in (self.folder, self.browse, self.max_size, self.text_encoding, self.analyze, self.query, self.search_target, self.all_folders, self.limit, self.search, self.table, self.analysis_filter, self.details_button, self.reset_settings_button):
             widget.setEnabled(not busy)
         self.open_button.setEnabled(not busy and self.table.currentRow() >= 0)
         self.content_button.setEnabled(not busy and self.table.currentRow() >= 0)
@@ -567,6 +643,8 @@ class MainWindow(QMainWindow):
             self.content_dialog.close()
             event.ignore()
         else:
+            self._settings_timer.stop()
+            self._save_settings()
             event.accept()
 
 
