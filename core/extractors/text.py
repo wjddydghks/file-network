@@ -19,7 +19,9 @@ def validate_text_encoding(encoding):
 class SourceSpan:
     start: int
     end: int
-    page: int
+    page: int | None
+    kind: str = 'page'
+    label: str | None = None
 
 
 @dataclass(frozen=True)

@@ -69,7 +69,7 @@ def test_page_longer_than_chunk_limit_never_crosses_page_boundary():
     result = TextExtractionResult('x.pdf', 'EXTRACTED', text=text,
         source_spans=(SourceSpan(0, 4001, 1), SourceSpan(4004, 4007, 3)))
     chunks = build_chunks(result)
-    assert chunks == [(0, 0, 2000, 1), (1, 2000, 4000, 1), (2, 4000, 4001, 1), (3, 4004, 4007, 3)]
+    assert chunks == [(0, 0, 2000, 1, 'page', None), (1, 2000, 4000, 1, 'page', None), (2, 4000, 4001, 1, 'page', None), (3, 4004, 4007, 3, 'page', None)]
 
 
 def test_chunk_lifecycle_move_stale_reanalysis_and_delete(root):

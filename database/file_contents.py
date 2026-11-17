@@ -44,9 +44,15 @@ def initialize_file_contents():
                 start_char INTEGER NOT NULL CHECK (start_char >= 0),
                 end_char INTEGER NOT NULL CHECK (end_char > start_char),
                 page INTEGER CHECK (page > 0),
+                source_kind TEXT,
+                source_label TEXT,
                 PRIMARY KEY (file_id, chunk_index)
             )
         """)
+        columns = {row['name'] for row in connection.execute('PRAGMA table_info(document_chunks)')}
+        for column in ('source_kind', 'source_label'):
+            if column not in columns:
+                connection.execute(f'ALTER TABLE document_chunks ADD COLUMN {column} TEXT')
         connection.execute("""
             CREATE TRIGGER IF NOT EXISTS invalidate_document_chunks
             AFTER UPDATE ON file_contents BEGIN
@@ -113,8 +119,8 @@ def save_file_content(file_id, result, source_fingerprint):
             source_fingerprint, datetime.now(timezone.utc).isoformat(),
         ))
         connection.executemany("""
-            INSERT INTO document_chunks (file_id, chunk_index, start_char, end_char, page)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO document_chunks (file_id, chunk_index, start_char, end_char, page, source_kind, source_label)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         """, [(file_id, *chunk) for chunk in chunks])
 
 

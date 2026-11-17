@@ -54,10 +54,11 @@ class ContentPreviewDialog(QDialog):
         self.details.setReadOnly(True)
         self.details.setMaximumHeight(150)
         self.summary = QLabel()
+        self.summary.setTextFormat(Qt.TextFormat.PlainText)
         self.summary.setWordWrap(True)
         self.mode = QComboBox()
         self.mode.addItem("전체 본문 구간", "text")
-        self.mode.addItem("인용 단위 · PDF 페이지 근거", "chunks")
+        self.mode.addItem("인용 단위 · 원본 위치", "chunks")
         self.mode.currentIndexChanged.connect(lambda: self.load_segment(0))
         self.previous = QPushButton("이전 구간")
         self.previous.clicked.connect(lambda: self.load_segment(self._result['segment'] - 1))
@@ -111,6 +112,10 @@ class ContentPreviewDialog(QDialog):
             self.note.setText("마지막 분석 시점의 인용입니다. PDF 페이지는 1부터 세는 실제 페이지 순서이며 인쇄된 쪽 번호와 다를 수 있습니다. 다른 형식에는 페이지를 추정하지 않습니다.")
             if result['chunk_count']:
                 location = f"PDF {result['page']:,}페이지" if result['page'] is not None else "추출 본문 위치"
+                if result.get('source_kind') == 'sheet':
+                    location = f"Excel 시트: {result['source_label']}"
+                elif result.get('source_kind') == 'slide':
+                    location = f"PowerPoint 슬라이드: {result['source_label']}"
                 self.summary.setText(f"인용 {result['segment'] + 1:,}/{result['chunk_count']:,} — {location}, {result['start_char'] + 1:,}–{result['end_char']:,}자 / 전체 {total:,}자")
             else:
                 self.summary.setText("저장된 인용이 없습니다. 이전 버전에서 분석한 파일은 폴더를 다시 분석하세요.")

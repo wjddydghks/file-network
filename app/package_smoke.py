@@ -16,6 +16,7 @@ def run_smoke():
     from benchmarks.content_analysis import run_benchmark
     from database import db
     import pymupdf
+    from openpyxl import Workbook
 
     frozen = is_frozen()
     outside_bundle = not frozen or not default_database_path().resolve().is_relative_to(Path(sys.executable).resolve().parent)
@@ -40,6 +41,12 @@ def run_smoke():
         root = base / 'scan'
         root.mkdir()
         (root / 'package-note.txt').write_bytes('한글 packagekeyword'.encode('utf-8'))
+        workbook = Workbook()
+        workbook.active.title = '검증 자료'
+        workbook.active['A1'] = 'packageofficekeyword'
+        workbook.create_sheet('다음 시트')['A1'] = 'second sheet'
+        workbook.save(root / 'package-sheets.xlsx')
+        workbook.close()
         (root / 'package-ignore').mkdir()
         (root / 'package-ignore' / 'hidden.txt').write_text('excludedpackagekeyword', encoding='utf-8')
         with pymupdf.open() as document:
@@ -60,9 +67,9 @@ def run_smoke():
                 view.show()
                 view.start_analysis()
                 wait_for(lambda: view.worker is None)
-                if view._outcome[0] != 'completed' or view._outcome[1]['extracted'] != 2:
+                if view._outcome[0] != 'completed' or view._outcome[1]['extracted'] != 3:
                     raise RuntimeError(f'패키지 GUI 분석 실패: {view._outcome}')
-                if len(db.get_active_files_under(root)) != 2:
+                if len(db.get_active_files_under(root)) != 3:
                     raise RuntimeError('패키지 제외 폴더가 스캔되었습니다.')
                 view.query.setText('packagekeyword')
                 view.start_search()
@@ -93,6 +100,25 @@ def run_smoke():
                 if dialog._result.get('page') != 4 or dialog.body.toPlainText() != 'page four':
                     raise RuntimeError('패키지 PDF 인용 탐색 실패')
                 dialog.close()
+                view.query.setText('packageofficekeyword')
+                view.start_search()
+                wait_for(lambda: view.worker is None)
+                if len(view._results) != 1:
+                    raise RuntimeError('패키지 Excel 검색 실패')
+                view.start_content_preview()
+                wait_for(lambda: view.worker is None)
+                dialog = view.content_dialog
+                if dialog is None:
+                    raise RuntimeError('패키지 Excel 미리보기 실패')
+                dialog.mode.setCurrentIndex(dialog.mode.findData('chunks'))
+                wait_for(lambda: dialog.worker is None)
+                if dialog._result.get('source_kind') != 'sheet' or dialog._result.get('source_label') != '검증 자료':
+                    raise RuntimeError('패키지 Excel 인용 위치 검증 실패')
+                dialog.next.click()
+                wait_for(lambda: dialog.worker is None)
+                if dialog._result.get('source_label') != '다음 시트' or 'second sheet' not in dialog.body.toPlainText():
+                    raise RuntimeError('패키지 Excel 인용 탐색 실패')
+                dialog.close()
                 view.close()
             finally:
                 view.close()
@@ -116,6 +142,6 @@ def run_smoke():
     return {
         'success': True, 'frozen': frozen, 'platform': platform.platform(),
         'database_outside_bundle': outside_bundle, 'gui_platform': app.platformName(),
-        'gui': {'analysis': True, 'search': True, 'preview': True, 'citations': True, 'exclusions': True, 'settings_restore': True, 'writable_data_directory': True},
+        'gui': {'analysis': True, 'search': True, 'preview': True, 'citations': True, 'office_citations': True, 'exclusions': True, 'settings_restore': True, 'writable_data_directory': True},
         'benchmark': benchmark,
     }
