@@ -76,6 +76,26 @@ def run_smoke():
                 wait_for(lambda: view.worker is None)
                 if len(view._results) != 1 or 'packagekeyword' not in view.preview.toPlainText():
                     raise RuntimeError('패키지 GUI 검색 실패')
+                view.area_button.click()
+                wait_for(lambda: view.area_dialog is not None and view.area_dialog.snapshot is not None and view.area_dialog.worker is None)
+                area = view.area_dialog
+                if area.snapshot['total_files'] != 3:
+                    raise RuntimeError('패키지 영역 구조 지도 집계 실패')
+                area.interest.setText('sharedpackagemarker')
+                area.apply.click()
+                wait_for(lambda: area.worker is None)
+                if area.snapshot['matched_files'] != 2:
+                    raise RuntimeError('패키지 영역 지도 키워드 탐색 실패')
+                for index, row in enumerate(area.snapshot['files']):
+                    if row['name'] == 'package-pages.pdf':
+                        area.table.selectRow(index)
+                        break
+                area.preview_button.click()
+                wait_for(lambda: area.worker is None)
+                if area._preview is None or area._preview['page'] != 2:
+                    raise RuntimeError('패키지 영역 지도 실제 인용 확인 실패')
+                area.close()
+                wait_for(lambda: view.area_dialog is None)
                 view.ai_button.click()
                 if view.ai_dialog is None:
                     raise RuntimeError('패키지 AI 화면 열기 실패')
@@ -154,6 +174,7 @@ def run_smoke():
             finally:
                 view.close()
                 wait_for(lambda: view.worker is None and view.scope_worker is None)
+                wait_for(lambda: view.area_dialog is None or view.area_dialog.worker is None)
                 wait_for(lambda: view.ai_dialog is None or view.ai_dialog.worker is None)
                 wait_for(lambda: view.content_dialog is None or view.content_dialog.worker is None)
                 view.close()
@@ -176,6 +197,6 @@ def run_smoke():
     return {
         'success': True, 'frozen': frozen, 'platform': platform.platform(),
         'database_outside_bundle': outside_bundle, 'gui_platform': app.platformName(),
-        'gui': {'analysis': True, 'search': True, 'preview': True, 'citations': True, 'office_citations': True, 'matching_citation': True, 'related_documents': True, 'relation_graph': True, 'graph_navigation': True, 'exclusions': True, 'settings_restore': True, 'writable_data_directory': True, 'internal_db_exclusion': True, 'ai_local_preview': True},
+        'gui': {'analysis': True, 'search': True, 'preview': True, 'citations': True, 'office_citations': True, 'matching_citation': True, 'related_documents': True, 'relation_graph': True, 'graph_navigation': True, 'exclusions': True, 'settings_restore': True, 'writable_data_directory': True, 'internal_db_exclusion': True, 'ai_local_preview': True, 'area_structure_map': True, 'area_interest_filter': True},
         'benchmark': benchmark,
     }
